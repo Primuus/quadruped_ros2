@@ -1,0 +1,57 @@
+# Build directories
+build/
+install/
+log/
+# colcon_ws/
+src/policy_model/
+
+# Compiled binaries
+*.o
+*.so
+*.a
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# CMake cache
+CMakeCache.txt
+CMakeFiles/
+Makefile
+compile_commands.json
+cmake_install.cmake
+
+# Python cache
+__pycache__/
+*.pyc
+
+# ROS2 specific
+**/_local_setup_util_*.py
+**/local_setup.*
+**/setup.bash
+
+# Temporary files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak
+
+# Test coverage
+coverage/
+*.gcda
+*.gcno
+*.gcov
+
+# Documentation build
+docs/_build/
+
+# Environment files
+.env
+venv/
+.env.local
