@@ -1,0 +1,110 @@
+policy_path: models/go2_policy.pt
+xml_path: resources/robots/go2/scene.xml
+
+simulation_duration: 60.0
+simulation_dt: 0.002
+control_decimation: 10
+
+num_actions: 12
+num_obs: 48
+
+joint_names:
+  - FL_hip_joint
+  - FL_thigh_joint
+  - FL_calf_joint
+  - FR_hip_joint
+  - FR_thigh_joint
+  - FR_calf_joint
+  - RL_hip_joint
+  - RL_thigh_joint
+  - RL_calf_joint
+  - RR_hip_joint
+  - RR_thigh_joint
+  - RR_calf_joint
+
+actuator_names:
+  - FL_hip
+  - FL_thigh
+  - FL_calf
+  - FR_hip
+  - FR_thigh
+  - FR_calf
+  - RL_hip
+  - RL_thigh
+  - RL_calf
+  - RR_hip
+  - RR_thigh
+  - RR_calf
+
+kps:
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+
+kds:
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+
+default_angles:
+  - 0.1
+  - 0.8
+  - -1.5
+  - -0.1
+  - 0.8
+  - -1.5
+  - 0.1
+  - 1.0
+  - -1.5
+  - -0.1
+  - 1.0
+  - -1.5
+
+command_init:
+  - 0.5
+  - 0.0
+  - 0.0
+
+command_limits:
+  - 1.0
+  - 1.0
+  - 1.0
+
+command_scale:
+  - 2.0
+  - 2.0
+  - 0.25
+
+obs_scale_lin_vel: 2.0
+obs_scale_ang_vel: 0.25
+obs_scale_dof_pos: 1.0
+obs_scale_dof_vel: 0.05
+
+initial_base_pos:
+  - 0.0
+  - 0.0
+  - 0.42
+
+initial_base_quat:
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
