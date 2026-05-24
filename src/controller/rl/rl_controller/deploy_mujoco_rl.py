@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import mujoco
 import mujoco.viewer
 import numpy as np
 
-from .core.config import Go2Config, default_config_path
-from .core.observer import Go2State, build_observation, quat_rotate_inverse
-from .core.pd import compute_torques
-from .core.policy import TorchScriptPolicy
+from rl_controller.core.config import Go2Config, default_config_path
+from rl_controller.core.observer import Go2State, build_observation, quat_rotate_inverse
+from rl_controller.core.pd import compute_torques
+from rl_controller.core.policy import TorchScriptPolicy
 
 
 class Go2MujocoRunner:

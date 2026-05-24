@@ -18,7 +18,7 @@ def collect_data_files() -> list[tuple[str, list[str]]]:
         ),
     ]
 
-    for folder_name in ('config', 'resources'):
+    for folder_name in ('config', 'models', 'resources'):
         folder = package_root / folder_name
         if not folder.exists():
             continue
@@ -41,16 +41,11 @@ setup(
     zip_safe=True,
     maintainer='RY',
     maintainer_email='18737950912@163.com',
-    description='Go2 RL deployment package for local MuJoCo simulation.',
+    description='Go2 RL deployment package for direct Python MuJoCo simulation.',
     license='Apache-2.0',
     extras_require={
         'test': [
             'pytest',
-        ],
-    },
-    entry_points={
-        'console_scripts': [
-            'deploy_mujoco_rl = rl_controller.deploy_mujoco_rl:main',
         ],
     },
 )
