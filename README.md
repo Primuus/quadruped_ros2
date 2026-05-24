@@ -1,90 +1,47 @@
-# Quadruped Traditional PD Control
+# 四足机器人控制工作区
 
-这个工作区只保留以传统 PD 为核心的控制链路，包含：
+这个工作区面向四足机器人控制，当前有两套完全独立的框架：
 
-- `quadruped`：传统 PD FSM 控制节点
-- `serial_controller`：QLP 遥控器串口输入，同时发布遥控器按键和摇杆
-- `kbd`：本机键盘备份输入
-- `robot_gazebo`：Go1 Gazebo Classic 仿真
-- `micro_ros_agent` / `micro_ros_msgs`：实机 MCU micro-ROS 通信层
-- `logger`：日志库
+- 传统 PD 控制：ROS2 启动，负责仿真和实机控制
+- RL 部署：直接 Python 运行，负责本地 MuJoCo 策略回放
 
-不包含 EstimatorTort、QP 平衡控制、OCS2 控制器、策略控制器和旧的通用输入链路。
+训练侧在另一个工作区 `quadruped_train`，不和这里混用。这里负责本地控制、仿真和策略加载。
 
-## 构建
+## 框架概览
+
+| 框架 | 入口 | 运行方式 | 作用 |
+| --- | --- | --- | --- |
+| 传统 PD | `ros2 launch quadruped ...` | ROS2 | 仿真 / 实机控制 |
+| RL 部署 | `python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py` | 直接 Python | 本地 MuJoCo + TorchScript 策略回放 |
+
+两套框架不共享启动入口：传统 PD 不加载 RL 策略，RL 部署也不接入 `quadruped` 的 ROS2 launch。
+
+## 目录说明
+
+- `src/controller/quadruped`：传统 PD 控制节点、launch、消息和配置
+- `src/controller/rl`：RL 部署包，直接 Python 运行，不接 `quadruped` 主 launch
+- `src/input/serial_controller`：QLP 遥控器串口输入
+- `src/input/kbd`：键盘备用输入
+- `src/robot_gazebo`：Gazebo Classic 仿真资源
+- `src/micro-ROS-Agent` / `src/micro_ros_msgs`：实机 MCU 通信层
+- `src/libraries/logger`：日志库
+
+## 传统 PD
+
+这套链路走 ROS2，适合仿真和实机。
+
+### 构建
 
 ```bash
-cd /home/ry/project/quadruped
+# 进入 quadruped 仓库根目录
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-构建后确认可执行入口：
+### 仿真
 
 ```bash
-ros2 pkg executables quadruped
-ros2 pkg executables serial_controller
-ros2 pkg executables kbd
-ros2 pkg executables micro_ros_agent
-```
-
-期望看到：
-
-```text
-quadruped quadruped_node
-serial_controller serial_controller_node
-kbd kbd
-micro_ros_agent micro_ros_agent
-```
-
-## 控制链路
-
-仿真：
-
-```text
-QLP遥控器
-  -> /input/mode, /kbd_input, /joystick/command
-  -> quadruped_node
-  -> /joint_effort_controller/commands
-  -> Gazebo Go1
-```
-
-实机：
-
-```text
-QLP遥控器
-  -> /input/mode, /kbd_input, /joystick/command
-  -> quadruped_node
-  -> /real_joint_effort_controller/commands
-  -> micro_ros_agent
-  -> MCU
-```
-
-实机链路里 MCU 和 Linux 之间只走 `/real_joint_effort_controller/commands`。MCU 不负责向 Linux 发布 `/joint_states`，Linux 侧也不会在实机启动时等待 `/joint_states`。
-
-`/input/mode` 的含义：
-
-- `0.0`：输出到 `/joint_effort_controller/commands`
-- `1.0`：输出到 `/real_joint_effort_controller/commands`
-
-仿真 launch 会锁定 `output_mode=0.0`，忽略 `/input/mode`，防止误切到实机输出。
-
-## 仿真运行
-
-启动 Go1 Gazebo 仿真、传统 PD 控制和 QLP 遥控器输入：
-
-```bash
-cd /home/ry/project/quadruped
-source install/setup.bash
 ros2 launch quadruped traditional_pd_sim.launch.py
-```
-
-默认会启动 `serial_controller`，一个遥控器节点同时输出按键和摇杆：
-
-```text
-遥控器按键 -> /kbd_input
-遥控器摇杆 -> /joystick/command
-遥控器模式 -> /input/mode
 ```
 
 无 GUI：
@@ -93,7 +50,7 @@ ros2 launch quadruped traditional_pd_sim.launch.py
 ros2 launch quadruped traditional_pd_sim.launch.py gui:=false
 ```
 
-如果仿真时不接遥控器：
+不用遥控器、改用键盘输入：
 
 ```bash
 ros2 launch quadruped traditional_pd_sim.launch.py \
@@ -101,40 +58,10 @@ ros2 launch quadruped traditional_pd_sim.launch.py \
   start_kbd:=true
 ```
 
-如需指定遥控器串口：
+### 实机
 
 ```bash
-ros2 launch quadruped traditional_pd_sim.launch.py serial_port:=/dev/ttyUSB0
-```
-
-仿真启动后，按控制流程操作：
-
-1. 等待 Gazebo 和 `/joint_states` 正常发布。
-2. 按 `f`，允许 Init 起身。
-3. 起身完成后按 `b`，进入 `Tort` 小跑模式。
-4. 推左摇杆控制方向。
-5. 需要卸力时按 `i`，进入 `Deinit`。
-
-## 实机运行
-
-实机通常需要两个串口：
-
-- 遥控器串口：默认 `/dev/ttyUSB0`
-- MCU micro-ROS 串口：默认 `/dev/ttyUSB1`
-
-推荐实机启动方式：一条命令打开两个终端，一个看机器狗控制状态，一个看 micro-ROS Agent 状态：
-
-```bash
-cd /home/ry/project/quadruped
-source install/setup.bash
 ros2 launch quadruped traditional_pd_real_terminals.launch.py
-```
-
-默认配置：
-
-```text
-遥控器串口: /dev/ttyUSB0
-MCU micro-ROS 串口: /dev/ttyUSB1
 ```
 
 指定串口：
@@ -145,79 +72,35 @@ ros2 launch quadruped traditional_pd_real_terminals.launch.py \
   mcu_port:=/dev/ttyUSB1
 ```
 
-如果不需要分开终端，也可以在当前终端启动传统 PD 控制、QLP 遥控器输入和 micro-ROS Agent：
+### 传统 PD 控制链路
 
-```bash
-cd /home/ry/project/quadruped
-source install/setup.bash
-ros2 launch quadruped traditional_pd_control.launch.py \
-  serial_port:=/dev/ttyUSB0 \
-  start_micro_ros_agent:=true \
-  mcu_port:=/dev/ttyUSB1 \
-  mcu_baud_rate:=115200
-```
-
-如果只想启动控制节点和遥控器，不启动 micro-ROS Agent：
-
-```bash
-ros2 launch quadruped traditional_pd_control.launch.py \
-  serial_port:=/dev/ttyUSB0
-```
-
-如果要强制实机输出，不依赖遥控器 `/input/mode`：
-
-```bash
-ros2 launch quadruped traditional_pd_control.launch.py \
-  output_mode:=1.0 \
-  lock_output_mode:=true \
-  serial_port:=/dev/ttyUSB0 \
-  start_micro_ros_agent:=true \
-  mcu_port:=/dev/ttyUSB1
-```
-
-实机启动后，按控制流程操作：
-
-1. 确认 MCU 通过 micro-ROS Agent 连接。
-2. 确认控制终端打印“实机力矩输出模式不等待 /joint_states，按本地初始状态进入 FSM”。
-3. 确认 `/input/mode` 为 `1.0`，或使用 `lock_output_mode:=true output_mode:=1.0`。
-4. 按 `f`，允许 Init 起身。
-5. 起身完成后按 `b`，进入 `Tort` 小跑模式。
-6. 推左摇杆控制方向。
-7. 需要卸力时按 `i`。
-
-按 `f` 后用于判断消息是否正常接收的日志顺序：
+仿真：
 
 ```text
-serial_controller: 遥控器按键: f
-quadruped_control: 收到 /joystick/command 按键: f
-quadruped_control: 收到f，允许Init起身
-quadruped_control: 开始初始化
-quadruped_control: 初始起身完成
+QLP 遥控器 / 键盘
+  -> /input/mode, /kbd_input, /joystick/command
+  -> quadruped_node
+  -> /joint_effort_controller/commands
+  -> Gazebo
 ```
 
-如果只看到 `serial_controller` 的按键日志，说明遥控器串口正常，但控制节点没收到输入话题。  
-实机正常情况下不会等待 `/joint_states`；如果仍然看到 `仍在等待 /joint_states`，说明启动参数里 `require_joint_state` 被设成了 `true`，这只适合仿真。
+实机：
 
-## 输入节点
-
-QLP 遥控器节点同时包含按键和摇杆输入，launch 默认一起启动。需要单独调试时：
-
-```bash
-ros2 run serial_controller serial_controller_node \
-  --ros-args \
-  -p serial_port:=/dev/ttyUSB0 \
-  -p baud_rate:=115200
+```text
+QLP 遥控器
+  -> /input/mode, /kbd_input, /joystick/command
+  -> quadruped_node
+  -> /real_joint_effort_controller/commands
+  -> micro_ros_agent
+  -> MCU
 ```
 
-本机键盘只作为没有遥控器时的备份输入：
+`/input/mode` 的含义：
 
-```bash
-ros2 run kbd kbd
-```
+- `0.0`：仿真输出 `/joint_effort_controller/commands`
+- `1.0`：实机输出 `/real_joint_effort_controller/commands`
 
-## FSM 按键
-
-当前传统 PD FSM 使用单字符按键：
+### FSM 按键
 
 | 按键 | 作用 |
 | --- | --- |
@@ -230,70 +113,90 @@ ros2 run kbd kbd
 | `a` / `u` | 进入 `FreeAngle` |
 | `d` | 刷新当前状态参数 |
 
-`Tort` 模式下左摇杆方向：
+## RL 部署
 
-| 摇杆 | 配置 |
-| --- | --- |
-| 左摇杆前 | `walk` |
-| 左摇杆后 | `back` |
-| 左摇杆左 | `left` |
-| 左摇杆右 | `right` |
-| 回中 | `stand` |
+这套链路不走 ROS2 launch，直接运行 Python 脚本。RL 部署不需要 `colcon build`，也不依赖 `micro-ROS`。
+
+### 依赖
+
+- `mujoco`
+- `torch`
+- `numpy`
+- `pyyaml`
+
+安装示例：
+
+```bash
+pip install mujoco torch numpy pyyaml
+```
+
+### 默认文件
+
+- 配置：`src/controller/rl/config/go2.yaml`
+- 机器人模型：`src/controller/rl/resources/robots/go2/scene.xml`
+- 策略文件：`src/controller/rl/models/go2_policy.pt`
+
+仓库默认不内置训练好的策略。训练完成后，把导出的 TorchScript 模型放到默认路径，或通过 `--policy-path` 指定路径。
+
+### 运行
+
+从仓库根目录直接运行：
+
+```bash
+python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py --headless
+```
+
+常用参数：
+
+```bash
+python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --policy-path src/controller/rl/models/go2_policy.pt \
+  --xml-path src/controller/rl/resources/robots/go2/scene.xml \
+  --device cpu \
+  --headless
+```
+
+也可以只改命令输入：
+
+```bash
+python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --command 0.5 0.0 0.0 \
+  --duration 30
+```
+
+### 说明
+
+- RL 部署和传统 PD 完全隔离
+- 不接 `quadruped` 主 launch
+- 不依赖 `micro-ROS`
+- 当前只做本地 MuJoCo 策略回放，不包含 sim-to-real 实机链路
 
 ## 常用检查
 
-确认输入：
+传统 PD 构建后检查 ROS2 入口：
 
 ```bash
-ros2 topic echo /kbd_input
-ros2 topic echo /joystick/command
-ros2 topic echo /input/mode
+ros2 pkg executables quadruped
+ros2 pkg executables serial_controller
+ros2 pkg executables kbd
 ```
 
-确认仿真状态：
+传统 PD 仿真话题检查：
 
 ```bash
-ros2 topic hz /joint_states
+ros2 topic echo /input/mode
 ros2 topic echo /joint_effort_controller/commands
 ```
 
-确认实机输出：
+RL 部署脚本语法检查：
 
 ```bash
-ros2 topic echo /real_joint_effort_controller/commands
+python3 -m py_compile src/controller/rl/rl_controller/deploy_mujoco_rl.py
 ```
 
-确认 micro-ROS Agent：
+## 两套框架的边界
 
-```bash
-ros2 node list | grep micro_ros
-ros2 topic info /real_joint_effort_controller/commands -v
-```
-
-查看串口：
-
-```bash
-ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
-dmesg | tail -n 50
-```
-
-手动触发起身：
-
-```bash
-ros2 topic pub --once /kbd_input std_msgs/msg/String "{data: 'f'}"
-```
-
-手动进入小跑：
-
-```bash
-ros2 topic pub --once /kbd_input std_msgs/msg/String "{data: 'b'}"
-```
-
-## 注意事项
-
-- 仿真使用 `/joint_effort_controller/commands`。
-- 实机使用 `/real_joint_effort_controller/commands`。
-- 仿真 launch 默认锁定仿真输出，遥控器的 `/input/mode` 不会改变输出话题。
-- 实机时遥控器串口和 MCU 串口不能是同一个设备。
-- 仿真要求 `quadruped_node` 收到 `/joint_states` 后才进入控制循环；实机默认不等待 `/joint_states`。
-- Init 状态下必须按 `f` 才会真正起身并开始发布力矩。
+- 传统 PD 只负责 ROS2 控制链路
+- RL 只负责本地 Python 回放
+- 两者可以共存，但启动入口和依赖是分开的
+- 训练在 `quadruped_train`，部署在这个仓库
