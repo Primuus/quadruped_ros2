@@ -117,6 +117,15 @@ QLP 遥控器
 
 这套链路不走 ROS2 launch，直接运行 Python 脚本。RL 部署不需要 `colcon build`，也不依赖 `micro-ROS`。
 
+完整流程是：
+
+```text
+quadruped_train 训练
+  -> play 最新 checkpoint 并导出 JIT 策略
+  -> 复制 JIT 策略到 quadruped/src/controller/rl/models/
+  -> quadruped 本地 MuJoCo 仿真
+```
+
 ### 依赖
 
 - `mujoco`
@@ -137,6 +146,51 @@ pip install mujoco torch numpy pyyaml
 - 策略文件：`src/controller/rl/models/go2_policy.pt`
 
 仓库默认不内置训练好的策略。训练完成后，把导出的 TorchScript 模型放到默认路径，或通过 `--policy-path` 指定路径。
+
+### 从训练侧导出策略
+
+在训练服务器的 `quadruped_train` 工作区里先完成训练：
+
+```bash
+python quadruped_rl/scripts/train_go2.py --headless
+```
+
+训练完成后，用 `play_go2.py` 加载最新 checkpoint，并导出 JIT 策略：
+
+```bash
+python quadruped_rl/scripts/play_go2.py --headless
+```
+
+默认导出路径：
+
+```text
+quadruped_train/logs/go2/exported/policies/policy_1.pt
+```
+
+如果要指定某一次训练或某个 checkpoint，可以加训练侧参数：
+
+```bash
+python quadruped_rl/scripts/play_go2.py \
+  --headless \
+  --load_run rough \
+  --checkpoint 500
+```
+
+### 复制到本地部署目录
+
+把导出的策略复制到本仓库的默认模型位置：
+
+```bash
+cp /path/to/quadruped_train/logs/go2/exported/policies/policy_1.pt \
+  src/controller/rl/models/go2_policy.pt
+```
+
+如果策略在当前训练服务器上，可以从本地执行：
+
+```bash
+scp -P 2222 hurricane@10.109.70.55:~/quadruped_train/logs/go2/exported/policies/policy_1.pt \
+  src/controller/rl/models/go2_policy.pt
+```
 
 ### 运行
 
