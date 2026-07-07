@@ -60,6 +60,8 @@ DEFAULT_FALL_GRAVITY_Z_THRESHOLD = -0.2  # 跌倒判定时的重力方向阈值
 DEFAULT_NUM_ONE_STEP_OBS = 45  # 单帧观测维度
 DEFAULT_HISTORY_LENGTH = 6  # 历史观测帧数
 DEFAULT_NUM_OBS = DEFAULT_NUM_ONE_STEP_OBS * DEFAULT_HISTORY_LENGTH  # policy 输入维度：45*6=270
+DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS = DEFAULT_NUM_ONE_STEP_OBS + 3  # 训练 critic 特权观测维度：45+base_lin_vel 3
+DEFAULT_NUM_PRIVILEGED_OBS = DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS  # 部署不使用，仅用于和训练侧配置对齐
 DEFAULT_OBS_MODE = 'go2_history_45x6'  # 默认使用 6 帧 45 维历史观测
 
 
@@ -102,6 +104,8 @@ class Go2Config:
     num_one_step_obs: int  # 单帧观测维度
     history_length: int  # 历史观测帧数
     num_obs: int  # 观测维度
+    num_one_step_privileged_obs: int  # 训练 critic 单帧特权观测维度，部署 actor 不使用
+    num_privileged_obs: int  # 训练 critic 输入维度，部署 actor 不使用
     obs_mode: str  # 观测模式
     joint_names: tuple[str, ...]  # 关节顺序
     actuator_names: tuple[str, ...]  # 执行器顺序
@@ -144,6 +148,10 @@ class Go2Config:
         num_one_step_obs = int(raw.get('num_one_step_obs', DEFAULT_NUM_ONE_STEP_OBS))
         history_length = int(raw.get('history_length', DEFAULT_HISTORY_LENGTH))
         num_obs = int(raw.get('num_obs', num_one_step_obs * history_length))
+        num_one_step_privileged_obs = int(
+            raw.get('num_one_step_privileged_obs', DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS)
+        )
+        num_privileged_obs = int(raw.get('num_privileged_obs', DEFAULT_NUM_PRIVILEGED_OBS))
 
         cfg = cls(
             package_root=package_root,
@@ -156,6 +164,8 @@ class Go2Config:
             num_one_step_obs=num_one_step_obs,
             history_length=history_length,
             num_obs=num_obs,
+            num_one_step_privileged_obs=num_one_step_privileged_obs,
+            num_privileged_obs=num_privileged_obs,
             obs_mode=str(raw.get('obs_mode', DEFAULT_OBS_MODE)),
             joint_names=tuple(str(item) for item in (raw.get('joint_names') or DEFAULT_JOINT_NAMES)),
             actuator_names=tuple(str(item) for item in (raw.get('actuator_names') or DEFAULT_ACTUATOR_NAMES)),
@@ -192,6 +202,16 @@ class Go2Config:
         expected_obs = self.num_one_step_obs * self.history_length
         if self.num_obs != expected_obs:
             raise ValueError(f'Go2 history policy expects {expected_obs} observations, got {self.num_obs}')
+        if self.num_one_step_privileged_obs != DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS:
+            raise ValueError(
+                f'Go2 training critic expects {DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS} privileged observations, '
+                f'got {self.num_one_step_privileged_obs}'
+            )
+        if self.num_privileged_obs != self.num_one_step_privileged_obs:
+            raise ValueError(
+                f'Go2 training critic expects num_privileged_obs={self.num_one_step_privileged_obs}, '
+                f'got {self.num_privileged_obs}'
+            )
         if len(self.joint_names) != self.num_actions:
             raise ValueError('joint_names length must match num_actions')
         if len(self.actuator_names) != self.num_actions:

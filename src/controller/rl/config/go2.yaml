@@ -16,10 +16,14 @@ control_decimation: 10
 num_actions: 12
 # 单帧观测维度，必须和训练侧保持一致；45 维不直接输入机身线速度
 num_one_step_obs: 45
-# 历史观测帧数，阶段 3 使用 6 帧
+# 历史观测帧数，阶段 4 使用 6 帧
 history_length: 6
 # policy 输入维度，必须和训练侧保持一致；45*6=270
 num_obs: 270
+# 训练 critic 的单帧特权观测维度：当前 45 维观测 + 机身线速度 3 维；部署 actor 不使用
+num_one_step_privileged_obs: 48
+# 训练 critic 输入维度；部署侧只用于配置对齐和检查，不输入 TorchScript actor
+num_privileged_obs: 48
 # 观测模式：6 帧 45 维历史观测，当前仍对应普通 PPO 导出策略
 obs_mode: go2_history_45x6
 

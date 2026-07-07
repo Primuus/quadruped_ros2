@@ -10,7 +10,7 @@
 src/controller/rl/models/policy_1.pt
 ```
 
-这个策略必须是当前 `quadruped_train` 阶段 3 导出的 270 维 Go2 历史观测策略。旧版 48 维或 45 维策略和当前部署代码不兼容，需要重新训练并重新导出。
+这个策略必须是当前 `quadruped_train` 阶段 4 导出的 270 维 Go2 历史观测 actor 策略。训练侧 critic 的 48 维 privileged obs 只用于 value function，不会进入部署模型输入。旧版 48 维或 45 维策略和当前部署代码不兼容，需要重新训练并重新导出。
 
 单帧 45 维观测顺序：
 
