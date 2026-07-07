@@ -36,7 +36,7 @@ def quat_rotate_inverse(quat: np.ndarray, vec: np.ndarray) -> np.ndarray:
 def build_observation(state: Go2State, command: np.ndarray, last_action: np.ndarray, cfg: Go2Config) -> np.ndarray:
     obs = np.zeros(cfg.num_obs, dtype=np.float32)
 
-    base_lin_vel = np.asarray(state.base_lin_vel, dtype=np.float32) * cfg.obs_scale_lin_vel
+    # 45 维观测顺序必须和 quadruped_train 中的 compute_observations 保持一致。
     base_ang_vel = np.asarray(state.base_ang_vel, dtype=np.float32) * cfg.obs_scale_ang_vel
     projected_gravity = quat_rotate_inverse(state.base_quat, GRAVITY_VECTOR)
     command_obs = np.asarray(command, dtype=np.float32).reshape(3) * cfg.command_scale
@@ -44,12 +44,10 @@ def build_observation(state: Go2State, command: np.ndarray, last_action: np.ndar
     joint_vel = np.asarray(state.joint_vel, dtype=np.float32) * cfg.obs_scale_dof_vel
     last_action = np.asarray(last_action, dtype=np.float32).reshape(cfg.num_actions)
 
-    obs[0:3] = base_lin_vel
+    obs[0:3] = command_obs
     obs[3:6] = base_ang_vel
     obs[6:9] = projected_gravity
-    obs[9:12] = command_obs
-    obs[12:24] = joint_pos
-    obs[24:36] = joint_vel
-    obs[36:48] = last_action
+    obs[9:21] = joint_pos
+    obs[21:33] = joint_vel
+    obs[33:45] = last_action
     return obs
-

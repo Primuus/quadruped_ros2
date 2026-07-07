@@ -122,7 +122,7 @@ QLP 遥控器
 ```text
 quadruped_train 训练
   -> play 最新 checkpoint 并导出 JIT 策略
-  -> 复制 JIT 策略到 quadruped/src/controller/rl/models/
+  -> 复制 JIT 策略到 quadruped/src/controller/rl/models/policy_1.pt
   -> quadruped 本地 MuJoCo 仿真
 ```
 
@@ -143,9 +143,22 @@ pip install mujoco torch numpy pyyaml
 
 - 配置：`src/controller/rl/config/go2.yaml`
 - 机器人模型：`src/controller/rl/resources/robots/go2/scene.xml`
-- 策略文件：`src/controller/rl/models/go2_policy.pt`
+- 策略文件：`src/controller/rl/models/policy_1.pt`
 
-仓库默认不内置训练好的策略。训练完成后，把导出的 TorchScript 模型放到默认路径，或通过 `--policy-path` 指定路径。
+仓库默认不内置训练好的策略。训练完成后，把导出的 TorchScript 模型放到默认路径 `src/controller/rl/models/policy_1.pt`，或通过 `--policy-path` 指定路径。
+
+当前部署侧只支持 Go2 的 45 维观测策略，观测顺序和 `quadruped_train` 保持一致：
+
+```text
+[0:3]   速度命令 vx, vy, yaw_rate
+[3:6]   机身角速度
+[6:9]   重力方向在机身坐标系下的投影
+[9:21]  12 个关节位置偏差
+[21:33] 12 个关节速度
+[33:45] 上一次策略动作
+```
+
+旧版 48 维策略不能直接放到这里运行，需要用当前训练配置重新训练并导出新的 `policy_1.pt`。
 
 ### 从训练侧导出策略
 
@@ -182,14 +195,14 @@ python quadruped_rl/scripts/play_go2.py \
 
 ```bash
 cp /path/to/quadruped_train/logs/go2/exported/policies/policy_1.pt \
-  src/controller/rl/models/go2_policy.pt
+  src/controller/rl/models/policy_1.pt
 ```
 
 如果策略在当前训练服务器上，可以从本地执行：
 
 ```bash
 scp -P 2222 hurricane@10.109.70.55:~/quadruped_train/logs/go2/exported/policies/policy_1.pt \
-  src/controller/rl/models/go2_policy.pt
+  src/controller/rl/models/policy_1.pt
 ```
 
 ### 运行
@@ -204,7 +217,7 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py --headless
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
-  --policy-path src/controller/rl/models/go2_policy.pt \
+  --policy-path src/controller/rl/models/policy_1.pt \
   --xml-path src/controller/rl/resources/robots/go2/scene.xml \
   --device cpu \
   --headless
@@ -217,6 +230,32 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --command 0.5 0.0 0.0 \
   --duration 30
 ```
+
+接 QLP 遥控器时再加：
+
+```bash
+python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --remote-port /dev/ttyUSB0 \
+  --remote-baud-rate 115200 \
+  --headless
+```
+
+默认映射：
+
+- `mode`: 遥控使能门控
+- 左摇杆 Y: 前进/后退
+- 左摇杆 X: 左右平移
+- 右摇杆 X: 偏航
+- 右摇杆 Y: 速度微调
+- `f`: 使能控制
+- `F`: 重置仿真
+- `i`: 关闭控制
+- `b`: 前进预设
+- `h`: 站立预设
+- `g` / `c`: 左右转向预设
+- `a` / `u`: 左右平移预设
+
+如果判定为摔倒，程序只会停止输出力矩，仿真本身继续运行；按 `F` 可以重置。
 
 ### 说明
 

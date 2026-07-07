@@ -1,13 +1,25 @@
-policy_path: models/go2_policy.pt
+# 新增参数时请同步补充中文注释，保持部署配置可读。
+
+# 训练导出的策略文件，部署时默认加载这个权重
+policy_path: models/policy_1.pt
+# MuJoCo 场景文件
 xml_path: resources/robots/go2/scene.xml
 
+# 仿真总时长 [s]
 simulation_duration: 60.0
+# 仿真步长 [s]
 simulation_dt: 0.002
+# 一个动作持续多少个仿真步
 control_decimation: 10
 
+# 动作维度，Go2 为 12 个关节
 num_actions: 12
-num_obs: 48
+# 观测维度，必须和训练侧保持一致；45 维不直接输入机身线速度
+num_obs: 45
+# 观测模式：Go2 使用 HIMLoco 风格 45 维观测
+obs_mode: go2_45
 
+# 关节顺序必须和模型输出、Mujoco 模型一致
 joint_names:
   - FL_hip_joint
   - FL_thigh_joint
@@ -22,6 +34,7 @@ joint_names:
   - RR_thigh_joint
   - RR_calf_joint
 
+# 执行器名称顺序
 actuator_names:
   - FL_hip
   - FL_thigh
@@ -36,34 +49,37 @@ actuator_names:
   - RR_thigh
   - RR_calf
 
+# 每个关节的 PD 比例增益
 kps:
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
+  - 40.0
+  - 40.0
+  - 40.0
+  - 40.0
+  - 40.0
+  - 40.0
+  - 40.0
+  - 40.0
+  - 40.0
+  - 40.0
+  - 40.0
+  - 40.0
 
+# 每个关节的 PD 微分增益
 kds:
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
+  - 1.0
 
+# action=0 时的默认关节角目标 [rad]
 default_angles:
   - 0.1
   - 0.8
@@ -78,31 +94,45 @@ default_angles:
   - 1.0
   - -1.5
 
+# 策略动作映射到关节角偏移的缩放
+action_scale: 0.25
+
+# 初始速度命令 [vx, vy, yaw_rate]
 command_init:
   - 0.5
   - 0.0
   - 0.0
 
+# 速度命令上限 [vx, vy, yaw_rate]
 command_limits:
   - 1.0
   - 1.0
   - 1.0
 
+# 观测里命令量的缩放系数
 command_scale:
   - 2.0
   - 2.0
   - 0.25
 
+# 跌倒判定阈值：机身高度
+fall_height_threshold: 0.18
+# 跌倒判定阈值：重力方向投影
+fall_gravity_z_threshold: -0.2
+
+# 观测缩放系数；45 维 actor 不使用机身线速度，保留 lin_vel 仅用于和训练配置命名对齐
 obs_scale_lin_vel: 2.0
 obs_scale_ang_vel: 0.25
 obs_scale_dof_pos: 1.0
 obs_scale_dof_vel: 0.05
 
+# 初始机身位姿
 initial_base_pos:
   - 0.0
   - 0.0
   - 0.42
 
+# 初始机身姿态四元数
 initial_base_quat:
   - 1.0
   - 0.0

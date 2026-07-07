@@ -1,1 +1,3 @@
-把训练导出的 Go2 TorchScript 策略放到这里，文件名默认用 `go2_policy.pt`。
+把训练导出的 Go2 TorchScript 策略放到这里，文件名默认用 `policy_1.pt`。
+
+当前部署代码只支持 45 维 Go2 策略；旧版 48 维策略不能直接使用。

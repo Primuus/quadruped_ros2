@@ -37,7 +37,7 @@ setup(
     version='0.0.0',
     packages=find_packages(exclude=['test']),
     data_files=collect_data_files(),
-    install_requires=['setuptools', 'numpy', 'pyyaml', 'torch', 'mujoco>=3.2.3'],
+    install_requires=['setuptools', 'numpy', 'pyyaml', 'pyserial', 'torch', 'mujoco>=3.2.3'],
     zip_safe=True,
     maintainer='RY',
     maintainer_email='18737950912@163.com',

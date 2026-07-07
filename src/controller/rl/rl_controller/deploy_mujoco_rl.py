@@ -17,25 +17,42 @@ from rl_controller.core.config import Go2Config, default_config_path
 from rl_controller.core.observer import Go2State, build_observation, quat_rotate_inverse
 from rl_controller.core.pd import compute_torques
 from rl_controller.core.policy import TorchScriptPolicy
+from rl_controller.remote import QlpRemoteInput, RemoteCommandController
+
+GRAVITY_VECTOR = np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
 
 class Go2MujocoRunner:
-    def __init__(self, cfg: Go2Config, device: str = 'cpu') -> None:
+    def __init__(
+        self,
+        cfg: Go2Config,
+        device: str = 'cpu',
+        remote_input: QlpRemoteInput | None = None,
+        remote_controller: RemoteCommandController | None = None,
+    ) -> None:
         self.cfg = cfg
         self.model = mujoco.MjModel.from_xml_path(str(cfg.xml_path))
         self.model.opt.timestep = cfg.simulation_dt
         self.data = mujoco.MjData(self.model)
         self.policy = TorchScriptPolicy(cfg.policy_path, device=device)
+        self.remote_input = remote_input
+        self.remote_controller = remote_controller
 
         self.joint_qpos_adr = self._resolve_joint_qpos_adr()
         self.joint_qvel_adr = self._resolve_joint_qvel_adr()
         self.actuator_ids = self._resolve_actuator_ids()
         self.actuator_torque_limits = self._resolve_actuator_torque_limits()
 
-        self.command = np.clip(cfg.command_init.copy(), -cfg.command_limits, cfg.command_limits)
+        if self.remote_controller is not None:
+            self.command = self.remote_controller.current_command.copy()
+        else:
+            self.command = np.clip(cfg.command_init.copy(), -cfg.command_limits, cfg.command_limits)
         self.last_action = np.zeros(cfg.num_actions, dtype=np.float32)
         self.current_torque = np.zeros(cfg.num_actions, dtype=np.float32)
         self.target_joint_pos = cfg.default_angles.copy()
+        self.is_fallen = False
+        self._fall_reason: str | None = None
+        self._last_remote_mode_active: bool | None = None
 
         self._reset_state()
 
@@ -81,6 +98,11 @@ class Go2MujocoRunner:
         self.data.qpos[3:7] = self.cfg.initial_base_quat
         for index, qpos_addr in enumerate(self.joint_qpos_adr):
             self.data.qpos[qpos_addr] = self.cfg.default_angles[index]
+        self.last_action.fill(0.0)
+        self.current_torque.fill(0.0)
+        self.target_joint_pos = self.cfg.default_angles.copy()
+        self.is_fallen = False
+        self._fall_reason = None
         mujoco.mj_forward(self.model, self.data)
 
     def _read_state(self) -> Go2State:
@@ -102,7 +124,17 @@ class Go2MujocoRunner:
         )
 
     def _compute_policy_output(self) -> None:
+        if self.is_fallen:
+            self.last_action.fill(0.0)
+            self.current_torque.fill(0.0)
+            return
+
         state = self._read_state()
+        fallen, reason = self._detect_fall(state)
+        if fallen:
+            self._mark_fallen(reason)
+            return
+
         observation = build_observation(state, self.command, self.last_action, self.cfg)
         action = self.policy.infer(observation)
         action = np.clip(action, -1.0, 1.0)
@@ -116,6 +148,57 @@ class Go2MujocoRunner:
         self.last_action = action.astype(np.float32, copy=False)
         self.current_torque = torques
         self.target_joint_pos = target_joint_pos
+
+    def _detect_fall(self, state: Go2State) -> tuple[bool, str]:
+        projected_gravity = quat_rotate_inverse(state.base_quat, GRAVITY_VECTOR)
+        reasons: list[str] = []
+
+        if float(state.base_pos[2]) < self.cfg.fall_height_threshold:
+            reasons.append(
+                f'base_z={float(state.base_pos[2]):.3f} < {self.cfg.fall_height_threshold:.3f}'
+            )
+        if float(projected_gravity[2]) > self.cfg.fall_gravity_z_threshold:
+            reasons.append(
+                f'gravity_z={float(projected_gravity[2]):.3f} > {self.cfg.fall_gravity_z_threshold:.3f}'
+            )
+
+        return (len(reasons) > 0, '; '.join(reasons))
+
+    def _mark_fallen(self, reason: str) -> None:
+        if not self.is_fallen:
+            self.is_fallen = True
+            self._fall_reason = reason
+            print(f'Fallen detected, torque output disabled: {reason}')
+        self.last_action.fill(0.0)
+        self.current_torque.fill(0.0)
+
+    def _process_remote_input(self) -> None:
+        if self.remote_input is None or self.remote_controller is None:
+            return
+
+        if self.remote_input.last_error is not None:
+            print(f'remote input stopped, disable remote control: {self.remote_input.last_error}')
+            self.remote_input = None
+            self.remote_controller.enabled = False
+            self.remote_controller.current_command.fill(0.0)
+            self.command.fill(0.0)
+            return
+
+        for key in self.remote_input.drain_key_events():
+            effect = self.remote_controller.apply_key(key)
+            if effect.log_message:
+                print(effect.log_message)
+            if effect.zero_last_action:
+                self.last_action.fill(0.0)
+            if effect.reset_sim:
+                self._reset_state()
+
+        snapshot = self.remote_input.latest_snapshot()
+        if snapshot is not None and snapshot.mode_active != self._last_remote_mode_active:
+            print(f'Remote mode: {1.0 if snapshot.mode_active else 0.0}')
+            self._last_remote_mode_active = snapshot.mode_active
+
+        self.command = self.remote_controller.update_snapshot(snapshot)
 
     def _write_control(self) -> None:
         self.data.ctrl[:] = 0.0
@@ -137,6 +220,7 @@ class Go2MujocoRunner:
         for step in range(total_steps):
             step_start = time.time()
 
+            self._process_remote_input()
             if step % decimation == 0:
                 self._compute_policy_output()
 
@@ -170,6 +254,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument('--device', type=str, default='cpu', help='Torch device used for policy inference.')
     parser.add_argument('--headless', action='store_true', help='Run without the MuJoCo viewer.')
+    parser.add_argument('--remote-port', type=str, default=None, help='QLP remote serial device.')
+    parser.add_argument('--remote-baud-rate', type=int, default=115200, help='QLP remote serial baud rate.')
+    parser.add_argument('--remote-deadzone', type=float, default=0.12, help='Deadzone applied to remote sticks.')
+    parser.add_argument(
+        '--remote-speed-trim-scale',
+        type=float,
+        default=0.5,
+        help='Scale factor for the right stick Y speed trim.',
+    )
     return parser
 
 
@@ -179,6 +272,7 @@ def main(argv: list[str] | None = None) -> None:
 
     config_path = args.config or default_config_path()
     cfg = Go2Config.from_yaml(config_path)
+    forward_preset = cfg.command_init.copy()
 
     if args.policy_path is not None:
         cfg = replace(cfg, policy_path=Path(args.policy_path).expanduser().resolve())
@@ -190,8 +284,35 @@ def main(argv: list[str] | None = None) -> None:
         command = np.asarray(args.command, dtype=np.float32)
         cfg = replace(cfg, command_init=np.clip(command, -cfg.command_limits, cfg.command_limits))
 
-    runner = Go2MujocoRunner(cfg, device=args.device)
-    runner.run(headless=args.headless)
+    remote_input = None
+    remote_controller = None
+    if args.remote_port is not None:
+        initial_command = np.zeros(3, dtype=np.float32)
+        if args.command is not None:
+            initial_command = np.clip(np.asarray(args.command, dtype=np.float32), -cfg.command_limits, cfg.command_limits)
+
+        remote_input = QlpRemoteInput(args.remote_port, args.remote_baud_rate)
+        remote_controller = RemoteCommandController(
+            command_limits=cfg.command_limits,
+            forward_preset=forward_preset,
+            initial_command=initial_command,
+            deadzone=args.remote_deadzone,
+            speed_trim_scale=args.remote_speed_trim_scale,
+        )
+        print(f'Remote input enabled: {args.remote_port} @ {args.remote_baud_rate}')
+        print(f'Remote initial command: {remote_controller.base_command}')
+
+    runner = Go2MujocoRunner(
+        cfg,
+        device=args.device,
+        remote_input=remote_input,
+        remote_controller=remote_controller,
+    )
+    try:
+        runner.run(headless=args.headless)
+    finally:
+        if remote_input is not None:
+            remote_input.close()
 
 
 if __name__ == '__main__':
