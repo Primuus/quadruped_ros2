@@ -147,7 +147,7 @@ pip install mujoco torch numpy pyyaml
 
 仓库默认不内置训练好的策略。训练完成后，把导出的 TorchScript 模型放到默认路径 `src/controller/rl/models/policy_1.pt`，或通过 `--policy-path` 指定路径。
 
-当前部署侧只支持 Go2 的 45 维观测策略，观测顺序和 `quadruped_train` 保持一致：
+当前部署侧支持 Go2 阶段 3 的 `45*6=270` 维历史观测策略，单帧 45 维观测顺序和 `quadruped_train` 保持一致：
 
 ```text
 [0:3]   速度命令 vx, vy, yaw_rate
@@ -158,7 +158,7 @@ pip install mujoco torch numpy pyyaml
 [33:45] 上一次策略动作
 ```
 
-旧版 48 维策略不能直接放到这里运行，需要用当前训练配置重新训练并导出新的 `policy_1.pt`。
+部署代码会维护 6 帧历史缓存，并把 `[当前 45 维, 上一帧 45 维, ..., 更早第 5 帧 45 维]` 输入给 TorchScript 策略。旧版 48 维或 45 维策略不能直接放到这里运行，需要用当前训练配置重新训练并导出新的 `policy_1.pt`。
 
 ### 从训练侧导出策略
 

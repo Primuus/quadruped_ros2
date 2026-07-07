@@ -14,7 +14,7 @@ import mujoco.viewer
 import numpy as np
 
 from rl_controller.core.config import Go2Config, default_config_path
-from rl_controller.core.observer import Go2State, build_observation, quat_rotate_inverse
+from rl_controller.core.observer import Go2ObservationHistory, Go2State, quat_rotate_inverse
 from rl_controller.core.pd import compute_torques
 from rl_controller.core.policy import TorchScriptPolicy
 from rl_controller.remote import QlpRemoteInput, RemoteCommandController
@@ -48,6 +48,7 @@ class Go2MujocoRunner:
         else:
             self.command = np.clip(cfg.command_init.copy(), -cfg.command_limits, cfg.command_limits)
         self.last_action = np.zeros(cfg.num_actions, dtype=np.float32)
+        self.observation_history = Go2ObservationHistory(cfg)
         self.current_torque = np.zeros(cfg.num_actions, dtype=np.float32)
         self.target_joint_pos = cfg.default_angles.copy()
         self.is_fallen = False
@@ -99,6 +100,7 @@ class Go2MujocoRunner:
         for index, qpos_addr in enumerate(self.joint_qpos_adr):
             self.data.qpos[qpos_addr] = self.cfg.default_angles[index]
         self.last_action.fill(0.0)
+        self.observation_history.reset()
         self.current_torque.fill(0.0)
         self.target_joint_pos = self.cfg.default_angles.copy()
         self.is_fallen = False
@@ -135,7 +137,7 @@ class Go2MujocoRunner:
             self._mark_fallen(reason)
             return
 
-        observation = build_observation(state, self.command, self.last_action, self.cfg)
+        observation = self.observation_history.update(state, self.command, self.last_action)
         action = self.policy.infer(observation)
         action = np.clip(action, -1.0, 1.0)
         torques, target_joint_pos = compute_torques(
@@ -170,6 +172,7 @@ class Go2MujocoRunner:
             self._fall_reason = reason
             print(f'Fallen detected, torque output disabled: {reason}')
         self.last_action.fill(0.0)
+        self.observation_history.reset()
         self.current_torque.fill(0.0)
 
     def _process_remote_input(self) -> None:
@@ -190,6 +193,7 @@ class Go2MujocoRunner:
                 print(effect.log_message)
             if effect.zero_last_action:
                 self.last_action.fill(0.0)
+                self.observation_history.reset()
             if effect.reset_sim:
                 self._reset_state()
 

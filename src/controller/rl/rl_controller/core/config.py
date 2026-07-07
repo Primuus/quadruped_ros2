@@ -48,8 +48,8 @@ DEFAULT_DEFAULT_ANGLES = np.array(
     dtype=np.float32,
 )  # action=0 时的默认关节角
 DEFAULT_POLICY_PATH = 'models/policy_1.pt'  # 默认策略文件名
-DEFAULT_KPS = np.full(12, 40.0, dtype=np.float32)  # 默认比例增益，和训练侧 Go2 配置一致
-DEFAULT_KDS = np.full(12, 1.0, dtype=np.float32)  # 默认微分增益，和训练侧 Go2 配置一致
+DEFAULT_KPS = np.full(12, 20.0, dtype=np.float32)  # 默认比例增益，和训练侧 Go2 配置一致
+DEFAULT_KDS = np.full(12, 0.5, dtype=np.float32)  # 默认微分增益，和训练侧 Go2 配置一致
 DEFAULT_COMMAND_INIT = np.array([0.5, 0.0, 0.0], dtype=np.float32)  # 默认初始速度命令 [vx, vy, yaw_rate]
 DEFAULT_COMMAND_LIMITS = np.array([1.0, 1.0, 1.0], dtype=np.float32)  # 命令上限 [vx, vy, yaw_rate]
 DEFAULT_COMMAND_SCALE = np.array([2.0, 2.0, 0.25], dtype=np.float32)  # 命令观测缩放
@@ -57,7 +57,10 @@ DEFAULT_INITIAL_BASE_POS = np.array([0.0, 0.0, 0.42], dtype=np.float32)  # 初�
 DEFAULT_INITIAL_BASE_QUAT = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # 初始机身姿态四元数
 DEFAULT_FALL_HEIGHT_THRESHOLD = 0.18  # 跌倒判定高度阈值
 DEFAULT_FALL_GRAVITY_Z_THRESHOLD = -0.2  # 跌倒判定时的重力方向阈值
-DEFAULT_OBS_MODE = 'go2_45'  # 默认使用 HIMLoco 风格 45 维观测
+DEFAULT_NUM_ONE_STEP_OBS = 45  # 单帧观测维度
+DEFAULT_HISTORY_LENGTH = 6  # 历史观测帧数
+DEFAULT_NUM_OBS = DEFAULT_NUM_ONE_STEP_OBS * DEFAULT_HISTORY_LENGTH  # policy 输入维度：45*6=270
+DEFAULT_OBS_MODE = 'go2_history_45x6'  # 默认使用 6 帧 45 维历史观测
 
 
 def _as_float_array(value: Any, expected_size: int, default: np.ndarray) -> np.ndarray:
@@ -96,6 +99,8 @@ class Go2Config:
     simulation_dt: float  # 仿真步长 [s]
     control_decimation: int  # 一个动作持续的仿真步数
     num_actions: int  # 动作维度
+    num_one_step_obs: int  # 单帧观测维度
+    history_length: int  # 历史观测帧数
     num_obs: int  # 观测维度
     obs_mode: str  # 观测模式
     joint_names: tuple[str, ...]  # 关节顺序
@@ -134,9 +139,11 @@ class Go2Config:
         policy_path = _resolve_path(package_root, raw.get('policy_path', DEFAULT_POLICY_PATH))
         xml_path = _resolve_path(package_root, raw.get('xml_path', 'resources/robots/go2/scene.xml'))
 
-        # Go2 固定为 12 维动作，当前策略默认使用 45 维观测。
+        # Go2 固定为 12 维动作，当前策略默认使用 45*6 历史观测。
         num_actions = int(raw.get('num_actions', 12))
-        num_obs = int(raw.get('num_obs', 45))
+        num_one_step_obs = int(raw.get('num_one_step_obs', DEFAULT_NUM_ONE_STEP_OBS))
+        history_length = int(raw.get('history_length', DEFAULT_HISTORY_LENGTH))
+        num_obs = int(raw.get('num_obs', num_one_step_obs * history_length))
 
         cfg = cls(
             package_root=package_root,
@@ -146,6 +153,8 @@ class Go2Config:
             simulation_dt=float(raw.get('simulation_dt', 0.002)),
             control_decimation=int(raw.get('control_decimation', 10)),
             num_actions=num_actions,
+            num_one_step_obs=num_one_step_obs,
+            history_length=history_length,
             num_obs=num_obs,
             obs_mode=str(raw.get('obs_mode', DEFAULT_OBS_MODE)),
             joint_names=tuple(str(item) for item in (raw.get('joint_names') or DEFAULT_JOINT_NAMES)),
@@ -174,10 +183,15 @@ class Go2Config:
     def validate(self) -> None:
         if self.num_actions != 12:
             raise ValueError(f'Go2 expects 12 actions, got {self.num_actions}')
-        if self.obs_mode != 'go2_45':
-            raise ValueError(f'Go2 currently expects obs_mode=go2_45, got {self.obs_mode}')
-        if self.num_obs != 45:
-            raise ValueError(f'Go2 45-dim policy expects 45 observations, got {self.num_obs}')
+        if self.num_one_step_obs != DEFAULT_NUM_ONE_STEP_OBS:
+            raise ValueError(f'Go2 one-step observation must be 45, got {self.num_one_step_obs}')
+        if self.history_length != DEFAULT_HISTORY_LENGTH:
+            raise ValueError(f'Go2 deployment expects history_length=6, got {self.history_length}')
+        if self.obs_mode != DEFAULT_OBS_MODE:
+            raise ValueError(f'Go2 expects obs_mode={DEFAULT_OBS_MODE}, got {self.obs_mode}')
+        expected_obs = self.num_one_step_obs * self.history_length
+        if self.num_obs != expected_obs:
+            raise ValueError(f'Go2 history policy expects {expected_obs} observations, got {self.num_obs}')
         if len(self.joint_names) != self.num_actions:
             raise ValueError('joint_names length must match num_actions')
         if len(self.actuator_names) != self.num_actions:
