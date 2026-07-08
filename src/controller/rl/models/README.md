@@ -1,3 +1,3 @@
 把训练导出的 Go2 TorchScript 策略放到这里，文件名默认用 `policy_1.pt`。
 
-当前部署代码支持阶段 5 的 270 维 Go2 历史观测 TorchScript 策略；训练侧 critic 使用的 48 维 privileged obs 不会进入部署模型输入。普通 PPO actor 和后续 `estimator + actor` HIM 导出模型都必须保持外部输入为 270 维历史观测；旧版 48 维或 45 维策略不能直接使用。
+当前部署代码支持阶段 6 的 270 维 Go2 历史观测 TorchScript 策略；训练侧 critic 使用的 48 维 privileged obs 不会进入部署模型输入。阶段 6 的 JIT 内部包含 `estimator + actor`，但外部输入仍然必须保持 270 维历史观测；旧版 48 维或 45 维策略不能直接使用。

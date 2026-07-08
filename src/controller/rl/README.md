@@ -10,7 +10,7 @@
 src/controller/rl/models/policy_1.pt
 ```
 
-这个策略必须是当前 `quadruped_train` 阶段 5 导出的 270 维 Go2 历史观测 TorchScript 策略。训练侧 critic 的 48 维 privileged obs 只用于 value function，不会进入部署模型输入。普通 PPO actor 和后续 `estimator + actor` HIM 导出模型都必须保持外部输入为 270 维历史观测；旧版 48 维或 45 维策略和当前部署代码不兼容，需要重新训练并重新导出。
+这个策略必须是当前 `quadruped_train` 阶段 6 导出的 270 维 Go2 历史观测 TorchScript 策略。训练侧 critic 的 48 维 privileged obs 只用于 value function 和 estimator，不会进入部署模型输入。阶段 6 的 JIT 内部包含 `estimator + actor`，但外部输入仍然必须保持 270 维历史观测；旧版 48 维或 45 维策略和当前部署代码不兼容，需要重新训练并重新导出。
 
 单帧 45 维观测顺序：
 
