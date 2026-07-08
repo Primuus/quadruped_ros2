@@ -1,3 +1,11 @@
-把训练导出的 Go2 TorchScript 策略放到这里，文件名默认用 `policy_1.pt`。
+# RL 策略模型目录
 
-当前部署代码支持阶段 7 的 270 维 Go2 历史观测 TorchScript 策略；训练侧 critic 使用的 238 维 privileged obs 不会进入部署模型输入。阶段 7 的 JIT 内部包含 `estimator + actor`，但外部输入仍然必须保持 270 维历史观测；旧版 48 维 critic 配置、48 维 actor 输入或 45 维 actor 输入的策略不能直接使用。
+把 `quadruped_train` 导出的 Go2 TorchScript 策略放到这里，默认文件名：
+
+```text
+policy_1.pt
+```
+
+当前部署代码加载的是 270 维历史观测 TorchScript 策略。训练侧 critic 的 238 维 privileged obs 不进入部署模型输入；导出的模型内部包含 `estimator + actor`，外部输入保持 270 维历史观测。
+
+仓库默认不提交模型权重，避免把大文件或临时训练结果放进 Git。

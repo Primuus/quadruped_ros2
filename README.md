@@ -1,44 +1,43 @@
 # 四足机器人控制工作区
 
-这个工作区面向四足机器人控制，当前有两套完全独立的框架：
+`quadruped` 是本地控制、仿真和策略加载工作区。当前包含两套互相独立的框架：
 
-- 传统 PD 控制：ROS2 启动，负责仿真和实机控制
-- RL 部署：直接 Python 运行，负责本地 MuJoCo 策略回放
+- 传统 PD 控制：ROS2 启动，负责 Gazebo 仿真和实机控制。
+- RL 本地部署：直接 Python 运行，负责 MuJoCo 中加载 TorchScript 策略。
 
-训练侧在另一个工作区 `quadruped_train`，不和这里混用。这里负责本地控制、仿真和策略加载。
+训练侧在 `quadruped_train` 工作区完成，不和本仓库混用。本仓库不训练策略，只负责传统控制链路和本地 RL 策略回放。
 
 ## 框架概览
 
 | 框架 | 入口 | 运行方式 | 作用 |
 | --- | --- | --- | --- |
-| 传统 PD | `ros2 launch quadruped ...` | ROS2 | 仿真 / 实机控制 |
-| RL 部署 | `python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py` | 直接 Python | 本地 MuJoCo + TorchScript 策略回放 |
+| 传统 PD | `ros2 launch quadruped ...` | ROS2 | Gazebo 仿真 / 实机控制 |
+| RL 部署 | `python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py` | 直接 Python | MuJoCo + TorchScript 策略回放 |
 
 两套框架不共享启动入口：传统 PD 不加载 RL 策略，RL 部署也不接入 `quadruped` 的 ROS2 launch。
 
 ## 目录说明
 
-- `src/controller/quadruped`：传统 PD 控制节点、launch、消息和配置
-- `src/controller/rl`：RL 部署包，直接 Python 运行，不接 `quadruped` 主 launch
-- `src/input/serial_controller`：QLP 遥控器串口输入
-- `src/input/kbd`：键盘备用输入
-- `src/robot_gazebo`：Gazebo Classic 仿真资源
-- `src/micro-ROS-Agent` / `src/micro_ros_msgs`：实机 MCU 通信层
-- `src/libraries/logger`：日志库
+- `src/controller/quadruped`：传统 PD 控制节点、FSM、launch、控制参数和消息接口。
+- `src/controller/rl`：RL 本地部署包，包含 MuJoCo runner、观测构造、TorchScript 策略加载、PD 力矩映射和遥控器输入解析。
+- `src/input/serial_controller`：QLP 遥控器串口输入，服务于传统 PD ROS2 链路。
+- `src/input/kbd`：键盘备用输入，服务于传统 PD ROS2 链路。
+- `src/robot_gazebo`：Gazebo Classic 仿真资源。
+- `src/micro-ROS-Agent` / `src/micro_ros_msgs`：实机 MCU 通信层。
+- `src/libraries/logger`：日志库。
 
 ## 传统 PD
 
-这套链路走 ROS2，适合仿真和实机。
+这套链路走 ROS2，适合 Gazebo 仿真和实机控制。
 
 ### 构建
 
 ```bash
-# 进入 quadruped 仓库根目录
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-### 仿真
+### Gazebo 仿真
 
 ```bash
 ros2 launch quadruped traditional_pd_sim.launch.py
@@ -113,107 +112,49 @@ QLP 遥控器
 | `a` / `u` | 进入 `FreeAngle` |
 | `d` | 刷新当前状态参数 |
 
-## RL 部署
+## RL 本地部署
 
-这套链路不走 ROS2 launch，直接运行 Python 脚本。RL 部署不需要 `colcon build`，也不依赖 `micro-ROS`。
+RL 链路不走 ROS2 launch，不依赖 `colcon build`，也不依赖 `micro-ROS`。它的作用是把 `quadruped_train` 导出的 TorchScript 策略加载到本地 MuJoCo 中验证。
 
-完整流程是：
+完整流程：
 
 ```text
 quadruped_train 训练
-  -> play 最新 checkpoint 并导出 JIT 策略
-  -> 复制 JIT 策略到 quadruped/src/controller/rl/models/policy_1.pt
-  -> quadruped 本地 MuJoCo 仿真
+  -> play_go2.py 导出 TorchScript 策略
+  -> 复制到 src/controller/rl/models/policy_1.pt
+  -> deploy_mujoco_rl.py 在 MuJoCo 中运行
 ```
+
+当前策略接口：
+
+```text
+输入：270 维历史观测
+内部：estimator + actor
+输出：12 维动作
+控制：动作 -> 目标关节角 -> PD 力矩 -> MuJoCo actuator
+```
+
+训练侧 critic 的 238 维 privileged obs 只用于训练，不进入本地部署策略输入。
 
 ### 依赖
 
-- `mujoco`
-- `torch`
-- `numpy`
-- `pyyaml`
-
-安装示例：
-
 ```bash
-pip install mujoco torch numpy pyyaml
+pip install mujoco torch numpy pyyaml pyserial
 ```
 
 ### 默认文件
 
 - 配置：`src/controller/rl/config/go2.yaml`
-- 机器人模型：`src/controller/rl/resources/robots/go2/scene.xml`
-- 策略文件：`src/controller/rl/models/policy_1.pt`
-
-仓库默认不内置训练好的策略。训练完成后，把导出的 TorchScript 模型放到默认路径 `src/controller/rl/models/policy_1.pt`，或通过 `--policy-path` 指定路径。
-
-当前部署侧支持 Go2 阶段 7 的 `45*6=270` 维历史观测 TorchScript 策略，单帧 45 维观测顺序和 `quadruped_train` 保持一致。训练侧 critic 的 238 维 privileged obs 只用于训练 value function 和 estimator，不进入本地 TorchScript 策略输入。阶段 7 导出的模型内部包含 `estimator + actor`，但外部输入仍然必须保持 270 维历史观测：
-
-```text
-[0:3]   速度命令 vx, vy, yaw_rate
-[3:6]   机身角速度
-[6:9]   重力方向在机身坐标系下的投影
-[9:21]  12 个关节位置偏差
-[21:33] 12 个关节速度
-[33:45] 上一次策略动作
-```
-
-部署代码会维护 6 帧历史缓存，并把 `[当前 45 维, 上一帧 45 维, ..., 更早第 5 帧 45 维]` 输入给 TorchScript 策略。旧版 48 维 critic 配置、48 维 actor 输入或 45 维 actor 输入的策略不能直接放到这里运行，需要用当前训练配置重新训练并导出新的 `policy_1.pt`。
-
-### 从训练侧导出策略
-
-在训练服务器的 `quadruped_train` 工作区里先完成训练：
-
-```bash
-python quadruped_rl/scripts/train_go2.py --headless
-```
-
-训练完成后，用 `play_go2.py` 加载最新 checkpoint，并导出 JIT 策略：
-
-```bash
-python quadruped_rl/scripts/play_go2.py --headless
-```
-
-默认导出路径：
-
-```text
-quadruped_train/logs/go2/exported/policies/policy_1.pt
-```
-
-如果要指定某一次训练或某个 checkpoint，可以加训练侧参数：
-
-```bash
-python quadruped_rl/scripts/play_go2.py \
-  --headless \
-  --load_run rough \
-  --checkpoint 500
-```
-
-### 复制到本地部署目录
-
-把导出的策略复制到本仓库的默认模型位置：
-
-```bash
-cp /path/to/quadruped_train/logs/go2/exported/policies/policy_1.pt \
-  src/controller/rl/models/policy_1.pt
-```
-
-如果策略在当前训练服务器上，可以从本地执行：
-
-```bash
-scp -P 2222 hurricane@10.109.70.55:~/quadruped_train/logs/go2/exported/policies/policy_1.pt \
-  src/controller/rl/models/policy_1.pt
-```
+- MuJoCo 场景：`src/controller/rl/resources/robots/go2/scene.xml`
+- TorchScript 策略：`src/controller/rl/models/policy_1.pt`
 
 ### 运行
-
-从仓库根目录直接运行：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py --headless
 ```
 
-常用参数：
+指定策略、模型和设备：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
@@ -223,7 +164,7 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --headless
 ```
 
-也可以只改命令输入：
+指定速度命令：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
@@ -231,38 +172,15 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --duration 30
 ```
 
-接 QLP 遥控器时再加：
+接 QLP 遥控器：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --remote-port /dev/ttyUSB0 \
-  --remote-baud-rate 115200 \
-  --headless
+  --remote-baud-rate 115200
 ```
 
-默认映射：
-
-- `mode`: 遥控使能门控
-- 左摇杆 Y: 前进/后退
-- 左摇杆 X: 左右平移
-- 右摇杆 X: 偏航
-- 右摇杆 Y: 速度微调
-- `f`: 使能控制
-- `F`: 重置仿真
-- `i`: 关闭控制
-- `b`: 前进预设
-- `h`: 站立预设
-- `g` / `c`: 左右转向预设
-- `a` / `u`: 左右平移预设
-
-如果判定为摔倒，程序只会停止输出力矩，仿真本身继续运行；按 `F` 可以重置。
-
-### 说明
-
-- RL 部署和传统 PD 完全隔离
-- 不接 `quadruped` 主 launch
-- 不依赖 `micro-ROS`
-- 当前只做本地 MuJoCo 策略回放，不包含 sim-to-real 实机链路
+RL 文件夹的完整结构和每个文件职责见 [src/controller/rl/README.md](src/controller/rl/README.md)。
 
 ## 常用检查
 
@@ -287,9 +205,10 @@ RL 部署脚本语法检查：
 python3 -m py_compile src/controller/rl/rl_controller/deploy_mujoco_rl.py
 ```
 
-## 两套框架的边界
+## 边界说明
 
-- 传统 PD 只负责 ROS2 控制链路
-- RL 只负责本地 Python 回放
-- 两者可以共存，但启动入口和依赖是分开的
-- 训练在 `quadruped_train`，部署在这个仓库
+- 传统 PD 负责 ROS2 控制链路。
+- RL 负责本地 Python + MuJoCo 策略回放。
+- 训练在 `quadruped_train`。
+- 部署和本地仿真在 `quadruped`。
+- 两套框架可以共存，但启动入口、依赖和运行方式是分开的。
