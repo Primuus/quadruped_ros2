@@ -147,7 +147,7 @@ pip install mujoco torch numpy pyyaml
 
 仓库默认不内置训练好的策略。训练完成后，把导出的 TorchScript 模型放到默认路径 `src/controller/rl/models/policy_1.pt`，或通过 `--policy-path` 指定路径。
 
-当前部署侧支持 Go2 阶段 6 的 `45*6=270` 维历史观测 TorchScript 策略，单帧 45 维观测顺序和 `quadruped_train` 保持一致。训练侧 critic 的 48 维 privileged obs 只用于训练 value function 和 estimator，不进入本地 TorchScript 策略输入。阶段 6 导出的模型内部包含 `estimator + actor`，但外部输入仍然必须保持 270 维历史观测：
+当前部署侧支持 Go2 阶段 7 的 `45*6=270` 维历史观测 TorchScript 策略，单帧 45 维观测顺序和 `quadruped_train` 保持一致。训练侧 critic 的 238 维 privileged obs 只用于训练 value function 和 estimator，不进入本地 TorchScript 策略输入。阶段 7 导出的模型内部包含 `estimator + actor`，但外部输入仍然必须保持 270 维历史观测：
 
 ```text
 [0:3]   速度命令 vx, vy, yaw_rate
@@ -158,7 +158,7 @@ pip install mujoco torch numpy pyyaml
 [33:45] 上一次策略动作
 ```
 
-部署代码会维护 6 帧历史缓存，并把 `[当前 45 维, 上一帧 45 维, ..., 更早第 5 帧 45 维]` 输入给 TorchScript 策略。旧版 48 维或 45 维策略不能直接放到这里运行，需要用当前训练配置重新训练并导出新的 `policy_1.pt`。
+部署代码会维护 6 帧历史缓存，并把 `[当前 45 维, 上一帧 45 维, ..., 更早第 5 帧 45 维]` 输入给 TorchScript 策略。旧版 48 维 critic 配置、48 维 actor 输入或 45 维 actor 输入的策略不能直接放到这里运行，需要用当前训练配置重新训练并导出新的 `policy_1.pt`。
 
 ### 从训练侧导出策略
 

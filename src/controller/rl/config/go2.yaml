@@ -16,15 +16,15 @@ control_decimation: 10
 num_actions: 12
 # 单帧观测维度，必须和训练侧保持一致；45 维不直接输入机身线速度
 num_one_step_obs: 45
-# 历史观测帧数，阶段 6 使用 6 帧
+# 历史观测帧数，当前 HIM 策略使用 6 帧
 history_length: 6
 # policy 输入维度，必须和训练侧保持一致；45*6=270
 num_obs: 270
-# 训练 critic 的单帧特权观测维度：当前 45 维观测 + 机身线速度 3 维；部署 actor 不使用
-num_one_step_privileged_obs: 48
+# 训练 critic 的单帧特权观测维度：45 + base_lin_vel3 + 外力3 + 高度187；部署 actor 不使用
+num_one_step_privileged_obs: 238
 # 训练 critic 输入维度；部署侧只用于配置对齐和检查，不输入 TorchScript actor
-num_privileged_obs: 48
-# 观测模式：6 帧 45 维历史观测，阶段 6 的 estimator+actor 导出模型也必须保持这个外部输入
+num_privileged_obs: 238
+# 观测模式：6 帧 45 维历史观测，当前 estimator+actor 导出模型也必须保持这个外部输入
 obs_mode: go2_history_45x6
 
 # 关节顺序必须和模型输出、Mujoco 模型一致
