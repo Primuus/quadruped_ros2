@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from .config import Go2Config
+from .config import RobotRLConfig
 
 
 def compute_torques(
     action: np.ndarray,
     joint_pos: np.ndarray,
     joint_vel: np.ndarray,
-    cfg: Go2Config,
+    cfg: RobotRLConfig,
     torque_limits: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     action = np.asarray(action, dtype=np.float32).reshape(cfg.num_actions)
@@ -24,4 +24,3 @@ def compute_torques(
         torques = np.clip(torques, -torque_limits, torque_limits)
 
     return torques.astype(np.float32), target_pos.astype(np.float32)
-

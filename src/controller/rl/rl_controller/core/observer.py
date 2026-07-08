@@ -4,13 +4,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .config import Go2Config
+from .config import RobotRLConfig
 
 GRAVITY_VECTOR = np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
 
 @dataclass(slots=True)
-class Go2State:
+class RobotState:
     base_pos: np.ndarray
     base_quat: np.ndarray
     base_lin_vel: np.ndarray
@@ -33,10 +33,15 @@ def quat_rotate_inverse(quat: np.ndarray, vec: np.ndarray) -> np.ndarray:
     return quat_rotate(conj, vec)
 
 
-def build_one_step_observation(state: Go2State, command: np.ndarray, last_action: np.ndarray, cfg: Go2Config) -> np.ndarray:
+def build_one_step_observation(
+    state: RobotState,
+    command: np.ndarray,
+    last_action: np.ndarray,
+    cfg: RobotRLConfig,
+) -> np.ndarray:
     obs = np.zeros(cfg.num_one_step_obs, dtype=np.float32)
 
-    # 45 维观测顺序必须和 quadruped_train 中的 compute_observations 保持一致。
+    # HIM 观测顺序必须和 quadruped_train 中的 actor observation 保持一致。
     base_ang_vel = np.asarray(state.base_ang_vel, dtype=np.float32) * cfg.obs_scale_ang_vel
     projected_gravity = quat_rotate_inverse(state.base_quat, GRAVITY_VECTOR)
     command_obs = np.asarray(command, dtype=np.float32).reshape(3) * cfg.command_scale
@@ -44,26 +49,27 @@ def build_one_step_observation(state: Go2State, command: np.ndarray, last_action
     joint_vel = np.asarray(state.joint_vel, dtype=np.float32) * cfg.obs_scale_dof_vel
     last_action = np.asarray(last_action, dtype=np.float32).reshape(cfg.num_actions)
 
+    action_offset = 9
     obs[0:3] = command_obs
     obs[3:6] = base_ang_vel
     obs[6:9] = projected_gravity
-    obs[9:21] = joint_pos
-    obs[21:33] = joint_vel
-    obs[33:45] = last_action
+    obs[action_offset:action_offset + cfg.num_actions] = joint_pos
+    obs[action_offset + cfg.num_actions:action_offset + 2 * cfg.num_actions] = joint_vel
+    obs[action_offset + 2 * cfg.num_actions:action_offset + 3 * cfg.num_actions] = last_action
     return obs
 
 
-class Go2ObservationHistory:
-    """维护 Go2 的 45*6 历史观测缓存。"""
+class ObservationHistory:
+    """维护四足机器人 HIM actor 历史观测缓存。"""
 
-    def __init__(self, cfg: Go2Config) -> None:
+    def __init__(self, cfg: RobotRLConfig) -> None:
         self.cfg = cfg
         self.buffer = np.zeros(cfg.num_obs, dtype=np.float32)
 
     def reset(self) -> None:
         self.buffer.fill(0.0)
 
-    def update(self, state: Go2State, command: np.ndarray, last_action: np.ndarray) -> np.ndarray:
+    def update(self, state: RobotState, command: np.ndarray, last_action: np.ndarray) -> np.ndarray:
         one_step_obs = build_one_step_observation(state, command, last_action, self.cfg)
         if self.cfg.history_length == 1:
             return one_step_obs
@@ -74,7 +80,11 @@ class Go2ObservationHistory:
         return self.buffer.copy()
 
 
-def build_observation(state: Go2State, command: np.ndarray, last_action: np.ndarray, cfg: Go2Config) -> np.ndarray:
-    """单次构造 policy 观测；部署主循环应优先使用 Go2ObservationHistory。"""
-    history = Go2ObservationHistory(cfg)
+def build_observation(state: RobotState, command: np.ndarray, last_action: np.ndarray, cfg: RobotRLConfig) -> np.ndarray:
+    """单次构造 policy 观测；部署主循环应优先使用 ObservationHistory。"""
+    history = ObservationHistory(cfg)
     return history.update(state, command, last_action)
+
+
+Go2State = RobotState
+Go2ObservationHistory = ObservationHistory

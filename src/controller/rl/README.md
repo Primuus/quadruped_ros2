@@ -1,24 +1,24 @@
 # RL 本地部署子工程说明
 
-`src/controller/rl` 是 `quadruped` 中的 RL 本地部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`，主要作用是在本地 MuJoCo 中加载 `quadruped_train` 导出的 TorchScript 策略，验证策略在 Go2 模型上的运动效果。
+`src/controller/rl` 是 `quadruped` 中的 RL 本地部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`，主要作用是在本地 MuJoCo 中加载 `quadruped_train` 导出的 TorchScript 策略，验证四足机器人策略的运动效果。
 
-当前 RL 部署不包含训练代码，也不包含实机 sim-to-real 输出链路。
+当前已经接入的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、MuJoCo 资源和策略文件，而不是复制部署主循环。当前 RL 部署不包含训练代码，也不包含实机 sim-to-real 输出链路。
 
 ## 总体数据流
 
 ```text
 MuJoCo state
-  -> Go2State
+  -> RobotState
   -> 45 维单帧观测
-  -> 6 帧 history buffer，形成 270 维 policy 输入
+  -> history buffer，形成 num_obs 维 policy 输入
   -> TorchScript policy(estimator + actor)
-  -> 12 维 action
+  -> num_actions 维 action
   -> action_scale + default_angles，得到目标关节角
   -> PD 计算力矩
   -> MuJoCo actuator
 ```
 
-训练侧 critic 使用的 238 维 privileged obs 不进入这里的策略输入。部署侧只负责构造 270 维历史观测并调用 TorchScript。
+训练侧 critic 使用的 privileged obs 不进入这里的策略输入。部署侧只负责按 YAML 配置构造历史观测并调用 TorchScript。
 
 ## 目录结构
 
@@ -52,7 +52,7 @@ src/controller/rl/
 
 ### `config/go2.yaml`
 
-Go2 部署配置。它是部署侧最重要的配置文件，负责把训练侧和 MuJoCo 部署侧对齐。
+当前 Go2 机器人实例的部署配置。它是部署侧最重要的配置文件，负责把训练侧和 MuJoCo 部署侧对齐。新增其他四足机器人时，建议复制一份新的 YAML，例如 `config/<robot>.yaml`，并替换 `robot_name`、`xml_path`、关节顺序、actuator 顺序、默认角、PD 和策略路径。
 
 主要内容：
 
@@ -60,8 +60,8 @@ Go2 部署配置。它是部署侧最重要的配置文件，负责把训练侧�
 - MuJoCo 场景路径：`xml_path`
 - 仿真时长和步长：`simulation_duration`、`simulation_dt`
 - 控制降频：`control_decimation`
-- 观测维度：`num_one_step_obs=45`、`history_length=6`、`num_obs=270`
-- 训练侧 critic 对齐信息：`num_one_step_privileged_obs=238`、`num_privileged_obs=238`
+- 观测维度：`num_one_step_obs`、`history_length`、`num_obs`
+- 训练侧 critic 对齐信息：`num_one_step_privileged_obs`、`num_privileged_obs`
 - 关节顺序：`joint_names`
 - actuator 顺序：`actuator_names`
 - PD 参数：`kps`、`kds`
@@ -75,7 +75,7 @@ Go2 部署配置。它是部署侧最重要的配置文件，负责把训练侧�
 修改原则：
 
 - 训练侧改了 PD、默认角、action scale 或观测缩放时，这里要同步。
-- 部署侧 policy 外部输入必须保持 270 维。
+- 部署侧 policy 外部输入必须和训练导出的 TorchScript 输入维度一致。
 - privileged obs 只用于配置对齐和检查，不会输入 TorchScript policy。
 
 ## 策略文件
@@ -93,21 +93,21 @@ models/policy_1.pt
 - `models/.gitignore`：避免误提交模型权重。
 - `models/README.md`：说明模型目录的用途。
 
-策略必须来自当前训练框架导出的 `estimator + actor` TorchScript，外部输入为 270 维历史观测。
+策略必须来自当前训练框架导出的 `estimator + actor` TorchScript，外部输入维度要和对应 YAML 中的 `num_obs` 一致。当前 Go2 策略为 270 维历史观测。
 
 ## MuJoCo 资源
 
 ### `resources/robots/go2/scene.xml`
 
-MuJoCo 场景入口文件。通常包含地面、光照、相机和 Go2 robot include。
+当前 Go2 实例的 MuJoCo 场景入口文件。通常包含地面、光照、相机和 robot include。
 
 ### `resources/robots/go2/go2.xml`
 
-Go2 MuJoCo robot 模型文件。部署代码会根据 `go2.yaml` 中的关节名和 actuator 名称，从这个模型中解析 qpos/qvel 地址和 actuator id。
+当前 Go2 实例的 MuJoCo robot 模型文件。部署代码会根据 YAML 中的关节名和 actuator 名称，从这个模型中解析 qpos/qvel 地址和 actuator id。
 
 ### `resources/robots/go2/urdf/`、`resources/robots/go2/obj/`
 
-Go2 机器人资产文件。用于模型几何、mesh 或 URDF 资源保留。
+当前 Go2 实例的机器人资产文件。用于模型几何、mesh 或 URDF 资源保留。新增机器人时应放到 `resources/robots/<robot>/` 下。
 
 ## Python 包入口
 
@@ -117,7 +117,7 @@ RL 本地部署主入口。
 
 负责内容：
 
-- 读取 `go2.yaml`。
+- 读取机器人 YAML 配置，默认是 `go2.yaml`。
 - 加载 MuJoCo 模型。
 - 加载 TorchScript policy。
 - 解析关节和 actuator 索引。
@@ -130,7 +130,8 @@ RL 本地部署主入口。
 
 主要类：
 
-- `Go2MujocoRunner`：封装 MuJoCo 仿真、策略推理、PD 输出和遥控器输入。
+- `MujocoRLRunner`：封装 MuJoCo 仿真、策略推理、PD 输出和遥控器输入。
+- `Go2MujocoRunner`：兼容旧导入的别名，新代码优先使用 `MujocoRLRunner`。
 
 常用命令行参数：
 
@@ -156,13 +157,13 @@ RL 本地部署主入口。
 
 负责内容：
 
-- 定义 `Go2Config` dataclass。
+- 定义 `RobotRLConfig` dataclass。
 - 从 YAML 读取部署配置。
 - 解析相对路径为绝对路径。
 - 提供默认关节顺序、默认 PD、默认观测维度等常量。
 - 校验动作维度、观测维度、history 长度、关节数量、actuator 数量。
 
-这个文件是部署侧配置一致性的第一道检查。训练侧如果改变和部署有关的配置，应同步更新 `go2.yaml` 和这里的默认值或校验逻辑。
+这个文件是部署侧配置一致性的第一道检查。训练侧如果改变和部署有关的配置，应同步更新对应机器人 YAML 和这里的默认值或校验逻辑。`Go2Config` 目前保留为 `RobotRLConfig` 的兼容别名。
 
 ### `rl_controller/core/observer.py`
 
@@ -170,12 +171,12 @@ RL 本地部署主入口。
 
 负责内容：
 
-- 定义 `Go2State`，保存 MuJoCo 中读出的机身和关节状态。
+- 定义 `RobotState`，保存 MuJoCo 中读出的机身和关节状态。
 - 提供四元数旋转工具：`quat_rotate`、`quat_rotate_inverse`。
-- 构造 45 维单帧 actor 观测。
-- 维护 6 帧 history buffer，输出 270 维 policy 输入。
+- 按配置构造单帧 actor 观测。
+- 维护 history buffer，输出 policy 输入。
 
-45 维观测顺序必须和 `quadruped_train` 保持一致：
+当前 45 维观测顺序必须和 `quadruped_train` 保持一致：
 
 ```text
 [0:3]   速度命令 vx, vy, yaw_rate
@@ -224,7 +225,7 @@ action 到力矩的转换模块。
 
 ### `rl_controller/core/__init__.py`
 
-core 模块导出文件，方便外部直接导入 `Go2Config`、`Go2ObservationHistory` 等核心类型。
+core 模块导出文件，方便外部直接导入 `RobotRLConfig`、`RobotState`、`ObservationHistory` 等核心类型。`Go2Config`、`Go2State`、`Go2ObservationHistory` 仍作为旧名称别名保留。
 
 ## remote 模块
 
@@ -389,14 +390,14 @@ python3 -m py_compile src/controller/rl/rl_controller/core/policy.py
 
 ```bash
 PYTHONPATH=src/controller/rl python3 - <<'PY'
-from rl_controller.core.config import Go2Config
-cfg = Go2Config.from_yaml('src/controller/rl/config/go2.yaml')
-print(cfg.num_obs, cfg.num_one_step_privileged_obs, cfg.num_privileged_obs)
+from rl_controller.core.config import RobotRLConfig
+cfg = RobotRLConfig.from_yaml('src/controller/rl/config/go2.yaml')
+print(cfg.robot_name, cfg.num_obs, cfg.num_one_step_privileged_obs, cfg.num_privileged_obs)
 PY
 ```
 
 期望输出：
 
 ```text
-270 238 238
+go2 270 238 238
 ```

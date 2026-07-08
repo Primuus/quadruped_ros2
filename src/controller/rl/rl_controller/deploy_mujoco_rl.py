@@ -13,8 +13,8 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from rl_controller.core.config import Go2Config, default_config_path
-from rl_controller.core.observer import Go2ObservationHistory, Go2State, quat_rotate_inverse
+from rl_controller.core.config import RobotRLConfig, default_config_path
+from rl_controller.core.observer import ObservationHistory, RobotState, quat_rotate_inverse
 from rl_controller.core.pd import compute_torques
 from rl_controller.core.policy import TorchScriptPolicy
 from rl_controller.remote import QlpRemoteInput, RemoteCommandController
@@ -22,10 +22,10 @@ from rl_controller.remote import QlpRemoteInput, RemoteCommandController
 GRAVITY_VECTOR = np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
 
-class Go2MujocoRunner:
+class MujocoRLRunner:
     def __init__(
         self,
-        cfg: Go2Config,
+        cfg: RobotRLConfig,
         device: str = 'cpu',
         remote_input: QlpRemoteInput | None = None,
         remote_controller: RemoteCommandController | None = None,
@@ -48,7 +48,7 @@ class Go2MujocoRunner:
         else:
             self.command = np.clip(cfg.command_init.copy(), -cfg.command_limits, cfg.command_limits)
         self.last_action = np.zeros(cfg.num_actions, dtype=np.float32)
-        self.observation_history = Go2ObservationHistory(cfg)
+        self.observation_history = ObservationHistory(cfg)
         self.current_torque = np.zeros(cfg.num_actions, dtype=np.float32)
         self.target_joint_pos = cfg.default_angles.copy()
         self.is_fallen = False
@@ -107,7 +107,7 @@ class Go2MujocoRunner:
         self._fall_reason = None
         mujoco.mj_forward(self.model, self.data)
 
-    def _read_state(self) -> Go2State:
+    def _read_state(self) -> RobotState:
         base_pos = self.data.qpos[0:3].copy()
         base_quat = self.data.qpos[3:7].copy()
         base_lin_vel_world = self.data.qvel[0:3].copy()
@@ -116,7 +116,7 @@ class Go2MujocoRunner:
         base_ang_vel = quat_rotate_inverse(base_quat, base_ang_vel_world)
         joint_pos = np.array([self.data.qpos[idx] for idx in self.joint_qpos_adr], dtype=np.float32)
         joint_vel = np.array([self.data.qvel[idx] for idx in self.joint_qvel_adr], dtype=np.float32)
-        return Go2State(
+        return RobotState(
             base_pos=base_pos,
             base_quat=base_quat,
             base_lin_vel=base_lin_vel,
@@ -151,7 +151,7 @@ class Go2MujocoRunner:
         self.current_torque = torques
         self.target_joint_pos = target_joint_pos
 
-    def _detect_fall(self, state: Go2State) -> tuple[bool, str]:
+    def _detect_fall(self, state: RobotState) -> tuple[bool, str]:
         projected_gravity = quat_rotate_inverse(state.base_quat, GRAVITY_VECTOR)
         reasons: list[str] = []
 
@@ -243,8 +243,8 @@ class Go2MujocoRunner:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description='Run the Go2 RL policy in MuJoCo.')
-    parser.add_argument('--config', type=Path, default=None, help='Path to the Go2 YAML config.')
+    parser = argparse.ArgumentParser(description='Run a quadruped RL policy in MuJoCo.')
+    parser.add_argument('--config', type=Path, default=None, help='Path to the robot YAML config.')
     parser.add_argument('--policy-path', type=Path, default=None, help='Override policy path.')
     parser.add_argument('--xml-path', type=Path, default=None, help='Override MuJoCo XML path.')
     parser.add_argument('--duration', type=float, default=None, help='Override simulation duration in seconds.')
@@ -275,7 +275,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     config_path = args.config or default_config_path()
-    cfg = Go2Config.from_yaml(config_path)
+    cfg = RobotRLConfig.from_yaml(config_path)
     forward_preset = cfg.command_init.copy()
 
     if args.policy_path is not None:
@@ -306,7 +306,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f'Remote input enabled: {args.remote_port} @ {args.remote_baud_rate}')
         print(f'Remote initial command: {remote_controller.base_command}')
 
-    runner = Go2MujocoRunner(
+    runner = MujocoRLRunner(
         cfg,
         device=args.device,
         remote_input=remote_input,
@@ -317,6 +317,9 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         if remote_input is not None:
             remote_input.close()
+
+
+Go2MujocoRunner = MujocoRLRunner
 
 
 if __name__ == '__main__':

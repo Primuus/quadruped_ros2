@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - fallback for source-only usage.
 
 # 新增配置字段时请同步补充中文说明，确保训练/部署配置一致可读。
 
+DEFAULT_ROBOT_NAME = 'go2'  # 当前默认机器人实例；新增机器人时通过 YAML 覆盖
 DEFAULT_JOINT_NAMES = (
     'FL_hip_joint',
     'FL_thigh_joint',
@@ -28,8 +29,8 @@ DEFAULT_JOINT_NAMES = (
     'RR_hip_joint',
     'RR_thigh_joint',
     'RR_calf_joint',
-)  # Go2 关节默认顺序
-DEFAULT_ACTUATOR_NAMES = tuple(name.replace('_joint', '') for name in DEFAULT_JOINT_NAMES)  # 执行器默认顺序
+)  # 默认关节顺序，当前对应 Go2
+DEFAULT_ACTUATOR_NAMES = tuple(name.replace('_joint', '') for name in DEFAULT_JOINT_NAMES)  # 默认执行器顺序
 DEFAULT_DEFAULT_ANGLES = np.array(
     [
         0.1,
@@ -46,10 +47,10 @@ DEFAULT_DEFAULT_ANGLES = np.array(
         -1.5,
     ],
     dtype=np.float32,
-)  # action=0 时的默认关节角
+)  # action=0 时的默认关节角，当前对应 Go2
 DEFAULT_POLICY_PATH = 'models/policy_1.pt'  # 默认策略文件名
-DEFAULT_KPS = np.full(12, 20.0, dtype=np.float32)  # 默认比例增益，和训练侧 Go2 配置一致
-DEFAULT_KDS = np.full(12, 0.5, dtype=np.float32)  # 默认微分增益，和训练侧 Go2 配置一致
+DEFAULT_KPS = np.full(12, 20.0, dtype=np.float32)  # 默认比例增益，当前对应 Go2
+DEFAULT_KDS = np.full(12, 0.5, dtype=np.float32)  # 默认微分增益，当前对应 Go2
 DEFAULT_COMMAND_INIT = np.array([0.5, 0.0, 0.0], dtype=np.float32)  # 默认初始速度命令 [vx, vy, yaw_rate]
 DEFAULT_COMMAND_LIMITS = np.array([1.0, 1.0, 1.0], dtype=np.float32)  # 命令上限 [vx, vy, yaw_rate]
 DEFAULT_COMMAND_SCALE = np.array([2.0, 2.0, 0.25], dtype=np.float32)  # 命令观测缩放
@@ -62,7 +63,13 @@ DEFAULT_HISTORY_LENGTH = 6  # 历史观测帧数
 DEFAULT_NUM_OBS = DEFAULT_NUM_ONE_STEP_OBS * DEFAULT_HISTORY_LENGTH  # policy 输入维度：45*6=270
 DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS = DEFAULT_NUM_ONE_STEP_OBS + 3 + 3 + 187  # 训练 critic 特权观测维度：45+base_lin_vel3+外力3+高度187
 DEFAULT_NUM_PRIVILEGED_OBS = DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS  # 部署不使用，仅用于和训练侧配置对齐
-DEFAULT_OBS_MODE = 'go2_history_45x6'  # 默认使用 6 帧 45 维历史观测
+DEFAULT_OBS_MODE = 'quadruped_history_45x6'  # 默认使用 6 帧 45 维历史观测
+
+
+def _default_array_for_actions(default: np.ndarray, num_actions: int, fill_value: float = 0.0) -> np.ndarray:
+    if default.shape == (num_actions,):
+        return default
+    return np.full(num_actions, fill_value, dtype=np.float32)
 
 
 def _as_float_array(value: Any, expected_size: int, default: np.ndarray) -> np.ndarray:
@@ -93,7 +100,8 @@ def default_config_path() -> Path:
 
 
 @dataclass(slots=True)
-class Go2Config:
+class RobotRLConfig:
+    robot_name: str  # 机器人名称，用于区分 Go2 或后续其他四足机器人
     package_root: Path  # 包根目录
     policy_path: Path  # 策略权重文件路径
     xml_path: Path  # MuJoCo 场景文件路径
@@ -126,7 +134,7 @@ class Go2Config:
     initial_base_quat: np.ndarray  # 初始机身姿态
 
     @classmethod
-    def from_yaml(cls, yaml_path: str | Path) -> 'Go2Config':
+    def from_yaml(cls, yaml_path: str | Path) -> 'RobotRLConfig':
         config_path = Path(yaml_path).expanduser().resolve()
         if not config_path.exists():
             raise FileNotFoundError(f'Config file not found: {config_path}')
@@ -135,25 +143,28 @@ class Go2Config:
             raw = yaml.safe_load(handle) or {}
 
         if not isinstance(raw, dict):
-            raise ValueError('Go2 config must be a mapping.')
+            raise ValueError('Robot RL config must be a mapping.')
 
         package_root = config_path.parent.parent
 
-        # 默认策略与场景文件，和 go2.yaml 中的注释保持一致。
+        robot_name = str(raw.get('robot_name', DEFAULT_ROBOT_NAME))
         policy_path = _resolve_path(package_root, raw.get('policy_path', DEFAULT_POLICY_PATH))
         xml_path = _resolve_path(package_root, raw.get('xml_path', 'resources/robots/go2/scene.xml'))
 
-        # Go2 固定为 12 维动作，当前策略默认使用 45*6 历史观测。
-        num_actions = int(raw.get('num_actions', 12))
+        num_actions = int(raw.get('num_actions', len(DEFAULT_JOINT_NAMES)))
         num_one_step_obs = int(raw.get('num_one_step_obs', DEFAULT_NUM_ONE_STEP_OBS))
         history_length = int(raw.get('history_length', DEFAULT_HISTORY_LENGTH))
         num_obs = int(raw.get('num_obs', num_one_step_obs * history_length))
         num_one_step_privileged_obs = int(
-            raw.get('num_one_step_privileged_obs', DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS)
+            raw.get('num_one_step_privileged_obs', num_one_step_obs + 3 + 3 + 187)
         )
-        num_privileged_obs = int(raw.get('num_privileged_obs', DEFAULT_NUM_PRIVILEGED_OBS))
+        num_privileged_obs = int(raw.get('num_privileged_obs', num_one_step_privileged_obs))
+        default_angles = _default_array_for_actions(DEFAULT_DEFAULT_ANGLES, num_actions, 0.0)
+        default_kps = _default_array_for_actions(DEFAULT_KPS, num_actions, 20.0)
+        default_kds = _default_array_for_actions(DEFAULT_KDS, num_actions, 0.5)
 
         cfg = cls(
+            robot_name=robot_name,
             package_root=package_root,
             policy_path=policy_path,
             xml_path=xml_path,
@@ -169,9 +180,9 @@ class Go2Config:
             obs_mode=str(raw.get('obs_mode', DEFAULT_OBS_MODE)),
             joint_names=tuple(str(item) for item in (raw.get('joint_names') or DEFAULT_JOINT_NAMES)),
             actuator_names=tuple(str(item) for item in (raw.get('actuator_names') or DEFAULT_ACTUATOR_NAMES)),
-            kps=_as_float_array(raw.get('kps'), num_actions, DEFAULT_KPS),
-            kds=_as_float_array(raw.get('kds'), num_actions, DEFAULT_KDS),
-            default_angles=_as_float_array(raw.get('default_angles'), num_actions, DEFAULT_DEFAULT_ANGLES),
+            kps=_as_float_array(raw.get('kps'), num_actions, default_kps),
+            kds=_as_float_array(raw.get('kds'), num_actions, default_kds),
+            default_angles=_as_float_array(raw.get('default_angles'), num_actions, default_angles),
             action_scale=float(raw.get('action_scale', 0.25)),
             command_init=_as_float_array(raw.get('command_init'), 3, DEFAULT_COMMAND_INIT),
             command_limits=_as_float_array(raw.get('command_limits'), 3, DEFAULT_COMMAND_LIMITS),
@@ -191,28 +202,36 @@ class Go2Config:
         return cfg
 
     def validate(self) -> None:
-        if self.num_actions != 12:
-            raise ValueError(f'Go2 expects 12 actions, got {self.num_actions}')
-        if self.num_one_step_obs != DEFAULT_NUM_ONE_STEP_OBS:
-            raise ValueError(f'Go2 one-step observation must be 45, got {self.num_one_step_obs}')
-        if self.history_length != DEFAULT_HISTORY_LENGTH:
-            raise ValueError(f'Go2 deployment expects history_length=6, got {self.history_length}')
-        if self.obs_mode != DEFAULT_OBS_MODE:
-            raise ValueError(f'Go2 expects obs_mode={DEFAULT_OBS_MODE}, got {self.obs_mode}')
+        expected_one_step_obs = 9 + 3 * self.num_actions
+        if self.num_one_step_obs != expected_one_step_obs:
+            raise ValueError(
+                f'Quadruped HIM one-step observation expects {expected_one_step_obs} observations '
+                f'for {self.num_actions} actions, got {self.num_one_step_obs}'
+            )
+        expected_obs_mode = f'quadruped_history_{self.num_one_step_obs}x{self.history_length}'
+        legacy_obs_mode = f'go2_history_{self.num_one_step_obs}x{self.history_length}'
+        if self.obs_mode not in {expected_obs_mode, legacy_obs_mode}:
+            raise ValueError(
+                f'Quadruped history policy expects obs_mode={expected_obs_mode}, got {self.obs_mode}'
+            )
         expected_obs = self.num_one_step_obs * self.history_length
         if self.num_obs != expected_obs:
-            raise ValueError(f'Go2 history policy expects {expected_obs} observations, got {self.num_obs}')
-        if self.num_one_step_privileged_obs != DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS:
+            raise ValueError(f'Quadruped history policy expects {expected_obs} observations, got {self.num_obs}')
+        expected_privileged_obs = self.num_one_step_obs + 3 + 3 + 187
+        if self.num_one_step_privileged_obs != expected_privileged_obs:
             raise ValueError(
-                f'Go2 training critic expects {DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS} privileged observations, '
+                f'Quadruped training critic expects {expected_privileged_obs} privileged observations, '
                 f'got {self.num_one_step_privileged_obs}'
             )
         if self.num_privileged_obs != self.num_one_step_privileged_obs:
             raise ValueError(
-                f'Go2 training critic expects num_privileged_obs={self.num_one_step_privileged_obs}, '
+                f'Quadruped training critic expects num_privileged_obs={self.num_one_step_privileged_obs}, '
                 f'got {self.num_privileged_obs}'
             )
         if len(self.joint_names) != self.num_actions:
             raise ValueError('joint_names length must match num_actions')
         if len(self.actuator_names) != self.num_actions:
             raise ValueError('actuator_names length must match num_actions')
+
+
+Go2Config = RobotRLConfig

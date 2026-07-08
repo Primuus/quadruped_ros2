@@ -41,7 +41,7 @@ setup(
     zip_safe=True,
     maintainer='RY',
     maintainer_email='18737950912@163.com',
-    description='Go2 RL deployment package for direct Python MuJoCo simulation.',
+    description='Quadruped RL deployment package for direct Python MuJoCo simulation.',
     license='Apache-2.0',
     extras_require={
         'test': [

@@ -5,7 +5,7 @@
 - 传统 PD 控制：ROS2 启动，负责 Gazebo 仿真和实机控制。
 - RL 本地部署：直接 Python 运行，负责 MuJoCo 中加载 TorchScript 策略。
 
-训练侧在 `quadruped_train` 工作区完成，不和本仓库混用。本仓库不训练策略，只负责传统控制链路和本地 RL 策略回放。
+训练侧在 `quadruped_train` 工作区完成，不和本仓库混用。本仓库不训练策略，只负责传统控制链路和本地 RL 策略回放。当前接入的机器人实例是 Go2，但 RL 部署接口按四足机器人通用配置组织，新增机器人时应新增 YAML、MuJoCo 资源和策略文件。
 
 ## 框架概览
 
@@ -125,7 +125,7 @@ quadruped_train 训练
   -> deploy_mujoco_rl.py 在 MuJoCo 中运行
 ```
 
-当前策略接口：
+当前 Go2 策略接口：
 
 ```text
 输入：270 维历史观测
@@ -147,6 +147,8 @@ pip install mujoco torch numpy pyyaml pyserial
 - 配置：`src/controller/rl/config/go2.yaml`
 - MuJoCo 场景：`src/controller/rl/resources/robots/go2/scene.xml`
 - TorchScript 策略：`src/controller/rl/models/policy_1.pt`
+
+新增其他四足机器人时，对应新增 `config/<robot>.yaml`、`resources/robots/<robot>/` 和匹配的 TorchScript 策略，然后通过 `--config` 指定配置运行。
 
 ### 运行
 

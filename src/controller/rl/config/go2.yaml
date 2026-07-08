@@ -1,5 +1,8 @@
 # 新增参数时请同步补充中文注释，保持部署配置可读。
 
+# 当前机器人实例名称。新增机器人时复制本配置并修改 robot_name / xml_path / 关节顺序等字段
+robot_name: go2
+
 # 训练导出的策略文件，部署时默认加载这个权重
 policy_path: models/policy_1.pt
 # MuJoCo 场景文件
@@ -25,7 +28,7 @@ num_one_step_privileged_obs: 238
 # 训练 critic 输入维度；部署侧只用于配置对齐和检查，不输入 TorchScript actor
 num_privileged_obs: 238
 # 观测模式：6 帧 45 维历史观测，当前 estimator+actor 导出模型也必须保持这个外部输入
-obs_mode: go2_history_45x6
+obs_mode: quadruped_history_45x6
 
 # 关节顺序必须和模型输出、Mujoco 模型一致
 joint_names:
