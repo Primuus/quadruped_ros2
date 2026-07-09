@@ -150,6 +150,23 @@ pip install mujoco torch numpy pyyaml pyserial
 
 新增其他四足机器人时，对应新增 `config/<robot>.yaml`、`resources/robots/<robot>/` 和匹配的 TorchScript 策略，然后通过 `--config` 指定配置运行。
 
+### 策略复制
+
+训练侧 `play` 导出策略后，在本地电脑终端执行：
+
+```bash
+scp hurricane@192.168.0.214:~/quadruped_train/logs/go2/exported/policies/policy_1.pt \
+  /home/ry/project/quadruped/src/controller/rl/models/policy_1.pt
+```
+
+如果 SSH 需要指定端口，才加 `-P`，例如：
+
+```bash
+scp -P 22 hurricane@192.168.0.214:~/quadruped_train/logs/go2/exported/policies/policy_1.pt \
+  /home/ry/project/quadruped/src/controller/rl/models/policy_1.pt
+```
+
+
 ### 运行
 
 ```bash
@@ -181,6 +198,50 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --remote-port /dev/ttyUSB0 \
   --remote-baud-rate 115200
 ```
+
+打印前几次 policy 推理的调试信息：
+
+```bash
+python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --command 0.0 0.0 0.0 \
+  --duration 5 \
+  --debug-steps 100
+```
+
+也可以使用 RL 子工程里的调试脚本：
+
+```bash
+python3 src/controller/rl/test/deploy_mujoco_rl_debug.py
+```
+
+该脚本默认静止命令运行 5 秒，并打印前 100 次 policy 推理的 `base_z`、`projected_gravity`、`joint_pos`、`action`、`torques` 和 `target_joint_pos`，用于排查 Isaac Gym 能走但 MuJoCo 表现异常的问题。
+
+MuJoCo RL 部署当前接入的是 QLP 遥控器输入，不是电脑键盘输入。未传入 `--remote-port` 时，仿真只使用 `--command` 或配置文件里的默认速度命令。
+
+遥控器摇杆映射：
+
+| 输入 | 作用 |
+| --- | --- |
+| 左摇杆 Y | 前进 / 后退 `vx` |
+| 左摇杆 X | 左右平移 `vy` |
+| 右摇杆 X | 偏航速度 `yaw_rate` |
+| 右摇杆 Y | 速度微调 |
+| `mode` | 遥控使能门控，未使能时速度命令清零 |
+
+遥控器按键映射：
+
+| 按键 | 作用 |
+| --- | --- |
+| `f` | 使能控制 |
+| `F` | 重置 MuJoCo 仿真 |
+| `i` | 关闭控制，速度命令清零 |
+| `h` | 站立预设 `[0.0, 0.0, 0.0]` |
+| `b` | 前进预设，默认来自 `command_init` |
+| `g` | 左转预设 |
+| `c` | 右转预设 |
+| `a` | 左移预设 |
+| `u` | 右移预设 |
+| `d` | 打印当前遥控状态 |
 
 RL 文件夹的完整结构和每个文件职责见 [src/controller/rl/README.md](src/controller/rl/README.md)。
 

@@ -36,6 +36,8 @@ src/controller/rl/
     deploy_mujoco_rl.py
     core/
     remote/
+  test/
+    deploy_mujoco_rl_debug.py
 ```
 
 ## 顶层文件
@@ -144,6 +146,7 @@ RL 本地部署主入口。
 | `--command VX VY WZ` | 指定速度命令。 |
 | `--device` | 指定 Torch 推理设备，如 `cpu` 或 `cuda:0`。 |
 | `--headless` | 不打开 MuJoCo viewer。 |
+| `--debug-steps N` | 打印前 `N` 次 policy 推理的状态、动作和力矩信息，默认不打印。 |
 | `--remote-port` | 启用 QLP 遥控器串口。 |
 | `--remote-baud-rate` | 遥控器串口波特率。 |
 | `--remote-deadzone` | 摇杆死区。 |
@@ -275,34 +278,72 @@ timestamp
 - 根据 `mode_active` 和使能状态决定是否输出命令。
 - 处理按键预设和仿真重置。
 
+说明：当前 MuJoCo RL 部署接入的是 QLP 遥控器输入，不是电脑键盘输入。电脑键盘没有单独写 viewer 回调；未传入 `--remote-port` 时，仿真只使用 `--command` 或 YAML 配置里的默认速度命令。
+
 默认摇杆映射：
 
 | 输入 | 作用 |
 | --- | --- |
-| 左摇杆 Y | 前进 / 后退 |
-| 左摇杆 X | 左右平移 |
-| 右摇杆 X | 偏航 |
+| 左摇杆 Y | 前进 / 后退 `vx` |
+| 左摇杆 X | 左右平移 `vy` |
+| 右摇杆 X | 偏航速度 `yaw_rate` |
 | 右摇杆 Y | 速度微调 |
-| `mode` | 遥控使能门控 |
+| `mode` | 遥控使能门控，未使能时速度命令清零 |
+
+摇杆命令会叠加在当前 `base_command` 上，并按配置里的 `command_limits` 裁剪。当前 Go2 配置中 `command_limits` 为 `[1.0, 1.0, 1.0]`，单位分别是 `[m/s, m/s, rad/s]`。
 
 默认按键：
 
 | 按键 | 作用 |
 | --- | --- |
 | `f` | 使能控制 |
-| `F` | 重置仿真 |
-| `i` | 关闭控制 |
-| `b` | 前进预设 |
-| `h` | 站立预设 |
-| `g` | 左转预设 |
-| `c` | 右转预设 |
-| `a` | 左移预设 |
-| `u` | 右移预设 |
+| `F` | 重置 MuJoCo 仿真 |
+| `i` | 关闭控制，速度命令清零 |
+| `h` | 站立预设 `[0.0, 0.0, 0.0]` |
+| `b` | 前进预设，默认来自 `command_init`，当前 Go2 是 `[0.5, 0.0, 0.0]` |
+| `g` | 左转预设，当前 Go2 约为 `[0.0, 0.0, 0.5]` |
+| `c` | 右转预设，当前 Go2 约为 `[0.0, 0.0, -0.5]` |
+| `a` | 左移预设，当前 Go2 约为 `[0.0, 0.5, 0.0]` |
+| `u` | 右移预设，当前 Go2 约为 `[0.0, -0.5, 0.0]` |
 | `d` | 打印当前遥控状态 |
 
 ### `rl_controller/remote/__init__.py`
 
 remote 模块导出文件，供 `deploy_mujoco_rl.py` 直接导入 `QlpRemoteInput` 和 `RemoteCommandController`。
+
+## test 目录
+
+### `test/deploy_mujoco_rl_debug.py`
+
+MuJoCo RL 部署调试脚本。
+
+默认参数：
+
+```text
+--command 0.0 0.0 0.0
+--duration 5
+--debug-steps 100
+```
+
+它不会改变部署逻辑，只是调用 `deploy_mujoco_rl.py` 的正式入口并打开调试输出。适合排查以下问题：
+
+- Isaac Gym play 可以走，但 MuJoCo 中不稳定或不动。
+- 初始姿态后很快触发摔倒检测。
+- policy action 很快饱和到 `-1` 或 `1`。
+- PD 力矩长期顶到 actuator 限幅。
+- 关节角、目标角和训练侧默认角不一致。
+
+调试输出包含：
+
+```text
+base_z
+projected_gravity
+command
+joint_pos
+action
+torques
+target_joint_pos
+```
 
 ## 运行方式
 
@@ -347,6 +388,21 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --remote-port /dev/ttyUSB0 \
   --remote-baud-rate 115200
+```
+
+打印前 100 次 policy 推理的调试信息：
+
+```bash
+python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --command 0.0 0.0 0.0 \
+  --duration 5 \
+  --debug-steps 100
+```
+
+使用调试脚本：
+
+```bash
+python3 src/controller/rl/test/deploy_mujoco_rl_debug.py
 ```
 
 ## 和训练侧的同步关系

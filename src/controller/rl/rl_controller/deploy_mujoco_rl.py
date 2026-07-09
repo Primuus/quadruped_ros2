@@ -29,6 +29,7 @@ class MujocoRLRunner:
         device: str = 'cpu',
         remote_input: QlpRemoteInput | None = None,
         remote_controller: RemoteCommandController | None = None,
+        debug_steps: int = 0,
     ) -> None:
         self.cfg = cfg
         self.model = mujoco.MjModel.from_xml_path(str(cfg.xml_path))
@@ -54,6 +55,8 @@ class MujocoRLRunner:
         self.is_fallen = False
         self._fall_reason: str | None = None
         self._last_remote_mode_active: bool | None = None
+        self.debug_steps = max(0, int(debug_steps))
+        self._debug_policy_steps = 0
 
         self._reset_state()
 
@@ -105,6 +108,7 @@ class MujocoRLRunner:
         self.target_joint_pos = self.cfg.default_angles.copy()
         self.is_fallen = False
         self._fall_reason = None
+        self._debug_policy_steps = 0
         mujoco.mj_forward(self.model, self.data)
 
     def _read_state(self) -> RobotState:
@@ -147,9 +151,32 @@ class MujocoRLRunner:
             self.cfg,
             self.actuator_torque_limits,
         )
+        self._print_debug_snapshot(state, action, torques, target_joint_pos)
         self.last_action = action.astype(np.float32, copy=False)
         self.current_torque = torques
         self.target_joint_pos = target_joint_pos
+
+    def _print_debug_snapshot(
+        self,
+        state: RobotState,
+        action: np.ndarray,
+        torques: np.ndarray,
+        target_joint_pos: np.ndarray,
+    ) -> None:
+        if self._debug_policy_steps >= self.debug_steps:
+            return
+
+        projected_gravity = quat_rotate_inverse(state.base_quat, GRAVITY_VECTOR)
+        print(f'[mujoco-rl-debug] policy_step={self._debug_policy_steps}')
+        print(f'  base_z: {float(state.base_pos[2]):.6f}')
+        print(f'  projected_gravity: {np.array2string(projected_gravity, precision=5, suppress_small=True)}')
+        print(f'  command: {np.array2string(self.command, precision=5, suppress_small=True)}')
+        print(f'  joint_pos: {np.array2string(state.joint_pos, precision=5, suppress_small=True)}')
+        print(f'  action: {np.array2string(action, precision=5, suppress_small=True)}')
+        print(f'  torques: {np.array2string(torques, precision=5, suppress_small=True)}')
+        print(f'  target_joint_pos: {np.array2string(target_joint_pos, precision=5, suppress_small=True)}')
+        print('-' * 80)
+        self._debug_policy_steps += 1
 
     def _detect_fall(self, state: RobotState) -> tuple[bool, str]:
         projected_gravity = quat_rotate_inverse(state.base_quat, GRAVITY_VECTOR)
@@ -258,6 +285,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument('--device', type=str, default='cpu', help='Torch device used for policy inference.')
     parser.add_argument('--headless', action='store_true', help='Run without the MuJoCo viewer.')
+    parser.add_argument(
+        '--debug-steps',
+        type=int,
+        default=0,
+        help='Print state/action/torque details for the first N policy steps. Default: 0.',
+    )
     parser.add_argument('--remote-port', type=str, default=None, help='QLP remote serial device.')
     parser.add_argument('--remote-baud-rate', type=int, default=115200, help='QLP remote serial baud rate.')
     parser.add_argument('--remote-deadzone', type=float, default=0.12, help='Deadzone applied to remote sticks.')
@@ -311,6 +344,7 @@ def main(argv: list[str] | None = None) -> None:
         device=args.device,
         remote_input=remote_input,
         remote_controller=remote_controller,
+        debug_steps=args.debug_steps,
     )
     try:
         runner.run(headless=args.headless)
