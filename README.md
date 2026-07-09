@@ -216,6 +216,20 @@ python3 src/controller/rl/test/deploy_mujoco_rl_debug.py
 
 该脚本默认静止命令运行 5 秒，并打印前 100 次 policy 推理的 `base_z`、`projected_gravity`、`joint_pos`、`action`、`torques` 和 `target_joint_pos`，用于排查 Isaac Gym 能走但 MuJoCo 表现异常的问题。
 
+接入 QLP 遥控器做调试：
+
+```bash
+python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
+```
+
+该脚本默认使用 `/dev/ttyUSB0`、`115200` 波特率，运行 30 秒，并打印前 200 次 policy 推理。需要换串口时直接覆盖参数：
+
+```bash
+python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py \
+  --remote-port /dev/ttyACM0 \
+  --debug-steps 300
+```
+
 MuJoCo RL 部署当前接入的是 QLP 遥控器输入，不是电脑键盘输入。未传入 `--remote-port` 时，仿真只使用 `--command` 或配置文件里的默认速度命令。
 
 遥控器摇杆映射：

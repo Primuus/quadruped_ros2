@@ -38,6 +38,7 @@ src/controller/rl/
     remote/
   test/
     deploy_mujoco_rl_debug.py
+    deploy_mujoco_rl_remote_debug.py
 ```
 
 ## 顶层文件
@@ -345,6 +346,36 @@ torques
 target_joint_pos
 ```
 
+### `test/deploy_mujoco_rl_remote_debug.py`
+
+带 QLP 遥控器输入的 MuJoCo RL 调试脚本。
+
+默认参数：
+
+```text
+--command 0.0 0.0 0.0
+--duration 30
+--debug-steps 200
+--remote-port /dev/ttyUSB0
+--remote-baud-rate 115200
+```
+
+该脚本适合在遥控器控制时观察策略输入和输出是否连续变化。运行后可以通过遥控器的 `mode`、摇杆和按键改变速度命令；脚本会打印 policy 推理时的状态、动作和力矩。
+
+常用命令：
+
+```bash
+python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
+```
+
+覆盖串口或打印步数：
+
+```bash
+python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py \
+  --remote-port /dev/ttyACM0 \
+  --debug-steps 300
+```
+
 ## 运行方式
 
 先把训练导出的策略放到：
@@ -403,6 +434,12 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
 
 ```bash
 python3 src/controller/rl/test/deploy_mujoco_rl_debug.py
+```
+
+使用遥控器调试脚本：
+
+```bash
+python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
 ```
 
 ## 和训练侧的同步关系
