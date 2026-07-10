@@ -143,7 +143,7 @@ class MujocoRLRunner:
 
         observation = self.observation_history.update(state, self.command, self.last_action)
         raw_action = self.policy.infer(observation)
-        clipped_action = np.clip(raw_action, -1.0, 1.0)
+        clipped_action = np.clip(raw_action, -self.cfg.clip_actions, self.cfg.clip_actions)
         torques, target_joint_pos = compute_torques(
             clipped_action,
             state.joint_pos,

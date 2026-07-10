@@ -69,7 +69,7 @@ src/controller/rl/
 - actuator 顺序：`actuator_names`
 - PD 参数：`kps`、`kds`
 - 默认关节角：`default_angles`
-- 动作缩放：`action_scale`
+- 动作缩放和动作裁剪：`action_scale`、`clip_actions`
 - 初始速度命令和命令限制：`command_init`、`command_limits`
 - 跌倒检测阈值：`fall_height_threshold`、`fall_gravity_z_threshold`
 - 观测缩放：`obs_scale_*`
@@ -77,7 +77,7 @@ src/controller/rl/
 
 修改原则：
 
-- 训练侧改了 PD、默认角、action scale 或观测缩放时，这里要同步。
+- 训练侧改了 PD、默认角、action scale、clip actions 或观测缩放时，这里要同步。
 - 部署侧 policy 外部输入必须和训练导出的 TorchScript 输入维度一致。
 - privileged obs 只用于配置对齐和检查，不会输入 TorchScript policy。
 
@@ -211,7 +211,7 @@ action 到力矩的转换模块。
 
 负责内容：
 
-- 将 policy 输出 action 限幅后映射为目标关节角：
+- 将 policy 输出 action 按配置中的 `clip_actions` 裁剪后映射为目标关节角：
 
   ```text
   target_pos = default_angles + action * action_scale
@@ -225,7 +225,7 @@ action 到力矩的转换模块。
 
 - 按 MuJoCo actuator torque limit 裁剪输出。
 
-这个文件里的控制逻辑必须和训练侧 action scale、默认角、PD 设定保持一致。
+这个文件里的控制逻辑必须和训练侧 action scale、clip actions、默认角、PD 设定保持一致。当前 Go2 部署配置中 `clip_actions: 100.0`，对应训练侧 `normalization.clip_actions = 100`。
 
 ### `rl_controller/core/__init__.py`
 
@@ -330,7 +330,7 @@ MuJoCo RL 部署调试脚本。
 
 - Isaac Gym play 可以走，但 MuJoCo 中不稳定或不动。
 - 初始姿态后很快触发摔倒检测。
-- policy 原始输出过大，或者裁剪后的 action 很快饱和到 `-1` 或 `1`。
+- policy 原始输出过大，或者裁剪后的 action 很快接近 `clip_actions` 上限。
 - PD 力矩长期顶到 actuator 限幅。
 - 关节角、目标角和训练侧默认角不一致。
 
@@ -347,7 +347,7 @@ torques
 target_joint_pos
 ```
 
-其中 `raw_action` 是 TorchScript policy 原始输出，`clipped_action` 是部署侧裁剪后实际送入 PD 的动作。
+其中 `raw_action` 是 TorchScript policy 原始输出，`clipped_action` 是部署侧按 YAML 中 `clip_actions` 裁剪后实际送入 PD 的动作。当前 Go2 为 `clip_actions: 100.0`，正常情况下二者应基本一致；如果训练侧修改了 `normalization.clip_actions`，部署侧也要同步。
 
 ### `test/deploy_mujoco_rl_remote_debug.py`
 
@@ -454,6 +454,7 @@ python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
 - 改了 action 维度或关节顺序。
 - 改了 `default_angles`。
 - 改了 `action_scale`。
+- 改了 `normalization.clip_actions`。
 - 改了 PD 参数。
 - 改了命令缩放或观测缩放。
 - 改了导出策略的外部输入格式。

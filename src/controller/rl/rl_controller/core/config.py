@@ -64,6 +64,7 @@ DEFAULT_NUM_OBS = DEFAULT_NUM_ONE_STEP_OBS * DEFAULT_HISTORY_LENGTH  # policy �
 DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS = DEFAULT_NUM_ONE_STEP_OBS + 3 + 3 + 187  # 训练 critic 特权观测维度：45+base_lin_vel3+外力3+高度187
 DEFAULT_NUM_PRIVILEGED_OBS = DEFAULT_NUM_ONE_STEP_PRIVILEGED_OBS  # 部署不使用，仅用于和训练侧配置对齐
 DEFAULT_OBS_MODE = 'quadruped_history_45x6'  # 默认使用 6 帧 45 维历史观测
+DEFAULT_CLIP_ACTIONS = 100.0  # 与训练侧 normalization.clip_actions 保持一致
 
 
 def _default_array_for_actions(default: np.ndarray, num_actions: int, fill_value: float = 0.0) -> np.ndarray:
@@ -121,6 +122,7 @@ class RobotRLConfig:
     kds: np.ndarray  # 每个关节的微分增益
     default_angles: np.ndarray  # 默认关节角
     action_scale: float  # 动作缩放系数
+    clip_actions: float  # 动作裁剪上限，需和训练侧 normalization.clip_actions 一致
     command_init: np.ndarray  # 初始速度命令
     command_limits: np.ndarray  # 速度命令上限
     command_scale: np.ndarray  # 命令观测缩放
@@ -184,6 +186,7 @@ class RobotRLConfig:
             kds=_as_float_array(raw.get('kds'), num_actions, default_kds),
             default_angles=_as_float_array(raw.get('default_angles'), num_actions, default_angles),
             action_scale=float(raw.get('action_scale', 0.25)),
+            clip_actions=float(raw.get('clip_actions', DEFAULT_CLIP_ACTIONS)),
             command_init=_as_float_array(raw.get('command_init'), 3, DEFAULT_COMMAND_INIT),
             command_limits=_as_float_array(raw.get('command_limits'), 3, DEFAULT_COMMAND_LIMITS),
             command_scale=_as_float_array(raw.get('command_scale'), 3, DEFAULT_COMMAND_SCALE),
@@ -232,6 +235,8 @@ class RobotRLConfig:
             raise ValueError('joint_names length must match num_actions')
         if len(self.actuator_names) != self.num_actions:
             raise ValueError('actuator_names length must match num_actions')
+        if self.clip_actions <= 0.0:
+            raise ValueError('clip_actions must be positive')
 
 
 Go2Config = RobotRLConfig
