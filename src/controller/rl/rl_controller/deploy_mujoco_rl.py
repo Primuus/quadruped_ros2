@@ -142,24 +142,25 @@ class MujocoRLRunner:
             return
 
         observation = self.observation_history.update(state, self.command, self.last_action)
-        action = self.policy.infer(observation)
-        action = np.clip(action, -1.0, 1.0)
+        raw_action = self.policy.infer(observation)
+        clipped_action = np.clip(raw_action, -1.0, 1.0)
         torques, target_joint_pos = compute_torques(
-            action,
+            clipped_action,
             state.joint_pos,
             state.joint_vel,
             self.cfg,
             self.actuator_torque_limits,
         )
-        self._print_debug_snapshot(state, action, torques, target_joint_pos)
-        self.last_action = action.astype(np.float32, copy=False)
+        self._print_debug_snapshot(state, raw_action, clipped_action, torques, target_joint_pos)
+        self.last_action = clipped_action.astype(np.float32, copy=False)
         self.current_torque = torques
         self.target_joint_pos = target_joint_pos
 
     def _print_debug_snapshot(
         self,
         state: RobotState,
-        action: np.ndarray,
+        raw_action: np.ndarray,
+        clipped_action: np.ndarray,
         torques: np.ndarray,
         target_joint_pos: np.ndarray,
     ) -> None:
@@ -172,7 +173,8 @@ class MujocoRLRunner:
         print(f'  projected_gravity: {np.array2string(projected_gravity, precision=5, suppress_small=True)}')
         print(f'  command: {np.array2string(self.command, precision=5, suppress_small=True)}')
         print(f'  joint_pos: {np.array2string(state.joint_pos, precision=5, suppress_small=True)}')
-        print(f'  action: {np.array2string(action, precision=5, suppress_small=True)}')
+        print(f'  raw_action: {np.array2string(raw_action, precision=5, suppress_small=True)}')
+        print(f'  clipped_action: {np.array2string(clipped_action, precision=5, suppress_small=True)}')
         print(f'  torques: {np.array2string(torques, precision=5, suppress_small=True)}')
         print(f'  target_joint_pos: {np.array2string(target_joint_pos, precision=5, suppress_small=True)}')
         print('-' * 80)

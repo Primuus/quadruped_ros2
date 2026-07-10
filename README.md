@@ -214,7 +214,7 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
 python3 src/controller/rl/test/deploy_mujoco_rl_debug.py
 ```
 
-该脚本默认静止命令运行 5 秒，并打印前 100 次 policy 推理的 `base_z`、`projected_gravity`、`joint_pos`、`action`、`torques` 和 `target_joint_pos`，用于排查 Isaac Gym 能走但 MuJoCo 表现异常的问题。
+该脚本默认静止命令运行 5 秒，并打印前 100 次 policy 推理的 `base_z`、`projected_gravity`、`joint_pos`、`raw_action`、`clipped_action`、`torques` 和 `target_joint_pos`，用于排查 Isaac Gym 能走但 MuJoCo 表现异常的问题。`raw_action` 是 policy 原始输出，`clipped_action` 是裁剪后实际送入 PD 的动作。
 
 接入 QLP 遥控器做调试：
 

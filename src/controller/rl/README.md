@@ -330,7 +330,7 @@ MuJoCo RL 部署调试脚本。
 
 - Isaac Gym play 可以走，但 MuJoCo 中不稳定或不动。
 - 初始姿态后很快触发摔倒检测。
-- policy action 很快饱和到 `-1` 或 `1`。
+- policy 原始输出过大，或者裁剪后的 action 很快饱和到 `-1` 或 `1`。
 - PD 力矩长期顶到 actuator 限幅。
 - 关节角、目标角和训练侧默认角不一致。
 
@@ -341,10 +341,13 @@ base_z
 projected_gravity
 command
 joint_pos
-action
+raw_action
+clipped_action
 torques
 target_joint_pos
 ```
+
+其中 `raw_action` 是 TorchScript policy 原始输出，`clipped_action` 是部署侧裁剪后实际送入 PD 的动作。
 
 ### `test/deploy_mujoco_rl_remote_debug.py`
 
