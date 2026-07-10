@@ -128,8 +128,8 @@ command_scale:
   - 2.0
   - 0.25
 
-# 跌倒判定阈值：机身高度
-fall_height_threshold: 0.18
+# 跌倒判定阈值：机身高度；设置为 0 或负数表示禁用高度检查
+fall_height_threshold: 0.0
 # 跌倒判定阈值：重力方向投影
 fall_gravity_z_threshold: -0.2
 

@@ -71,7 +71,7 @@ src/controller/rl/
 - 默认关节角：`default_angles`
 - 动作缩放和动作裁剪：`action_scale`、`clip_actions`
 - 初始速度命令和命令限制：`command_init`、`command_limits`
-- 跌倒检测阈值：`fall_height_threshold`、`fall_gravity_z_threshold`
+- 跌倒检测阈值：`fall_height_threshold`、`fall_gravity_z_threshold`。`fall_height_threshold <= 0` 表示禁用机身高度检查。
 - 观测缩放：`obs_scale_*`
 - 初始机身位姿：`initial_base_pos`、`initial_base_quat`
 
@@ -463,7 +463,7 @@ python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
 
 ## 摔倒处理
 
-部署主循环会根据机身高度和重力方向投影判断是否摔倒。判定摔倒后：
+部署主循环会根据机身高度和重力方向投影判断是否摔倒。当前 Go2 配置中 `fall_height_threshold: 0.0`，表示不再因为机身高度过低直接停力矩；重力方向检查仍保留。判定摔倒后：
 
 - policy 不再输出有效 action。
 - 当前力矩清零。

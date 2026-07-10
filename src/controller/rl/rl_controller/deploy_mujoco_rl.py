@@ -184,7 +184,7 @@ class MujocoRLRunner:
         projected_gravity = quat_rotate_inverse(state.base_quat, GRAVITY_VECTOR)
         reasons: list[str] = []
 
-        if float(state.base_pos[2]) < self.cfg.fall_height_threshold:
+        if self.cfg.fall_height_threshold > 0.0 and float(state.base_pos[2]) < self.cfg.fall_height_threshold:
             reasons.append(
                 f'base_z={float(state.base_pos[2]):.3f} < {self.cfg.fall_height_threshold:.3f}'
             )
