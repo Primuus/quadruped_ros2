@@ -41,7 +41,7 @@ setup(
         'setuptools',
         'numpy',
         'pyyaml',
-        'pyserial',
+        'evdev',
         'torch',
         'mujoco>=3.2.3',
         'onnxruntime>=1.16,<2',

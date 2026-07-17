@@ -12,6 +12,7 @@ from rl_controller.deploy_mujoco_rl import main
 
 if __name__ == '__main__':
     default_args = [
+        '--no-keyboard',
         '--command',
         '0.0',
         '0.0',

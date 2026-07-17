@@ -54,6 +54,24 @@ DEFAULT_KDS = np.full(12, 0.5, dtype=np.float32)  # 默认微分增益，当前�
 DEFAULT_COMMAND_INIT = np.array([0.5, 0.0, 0.0], dtype=np.float32)  # 默认初始速度命令 [vx, vy, yaw_rate]
 DEFAULT_COMMAND_LIMITS = np.array([1.0, 1.0, 1.0], dtype=np.float32)  # 命令上限 [vx, vy, yaw_rate]
 DEFAULT_COMMAND_SCALE = np.array([2.0, 2.0, 0.25], dtype=np.float32)  # 命令观测缩放
+DEFAULT_KEYBOARD_BINDINGS = {
+    'forward': 'KEY_W',
+    'backward': 'KEY_S',
+    'left': 'KEY_A',
+    'right': 'KEY_D',
+    'turn_left': 'KEY_Q',
+    'turn_right': 'KEY_E',
+    'stop': 'KEY_SPACE',
+    'enable': 'KEY_F',
+    'disable': 'KEY_I',
+    'speed_low': 'KEY_1',
+    'speed_medium': 'KEY_2',
+    'speed_high': 'KEY_3',
+    'reset_sim': 'KEY_R',
+    'print_status': 'KEY_P',
+}  # Linux evdev 键名；仿真键盘映射的唯一配置来源
+DEFAULT_KEYBOARD_SPEED_LEVELS = np.array([0.25, 0.5, 1.0], dtype=np.float32)  # 低、中、高三档速度比例
+DEFAULT_KEYBOARD_DEFAULT_SPEED_LEVEL = 2  # 默认使用中速档
 DEFAULT_INITIAL_BASE_POS = np.array([0.0, 0.0, 0.42], dtype=np.float32)  # 初始机身位置 [m]
 DEFAULT_INITIAL_BASE_QUAT = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # 初始机身姿态四元数
 DEFAULT_FALL_HEIGHT_THRESHOLD = 0.18  # 跌倒判定高度阈值
@@ -126,6 +144,9 @@ class RobotRLConfig:
     command_init: np.ndarray  # 初始速度命令
     command_limits: np.ndarray  # 速度命令上限
     command_scale: np.ndarray  # 命令观测缩放
+    keyboard_bindings: dict[str, str]  # Linux evdev 键名到控制语义的映射
+    keyboard_speed_levels: np.ndarray  # 键盘低、中、高三档速度比例
+    keyboard_default_speed_level: int  # 默认速度档位，取值 1/2/3
     fall_height_threshold: float  # 跌倒高度阈值
     fall_gravity_z_threshold: float  # 跌倒重力方向阈值
     obs_scale_lin_vel: float  # 线速度观测缩放
@@ -164,6 +185,16 @@ class RobotRLConfig:
         default_angles = _default_array_for_actions(DEFAULT_DEFAULT_ANGLES, num_actions, 0.0)
         default_kps = _default_array_for_actions(DEFAULT_KPS, num_actions, 20.0)
         default_kds = _default_array_for_actions(DEFAULT_KDS, num_actions, 0.5)
+        keyboard_raw = raw.get('keyboard') or {}
+        if not isinstance(keyboard_raw, dict):
+            raise ValueError('keyboard config must be a mapping')
+        keyboard_bindings_raw = keyboard_raw.get('bindings') or {}
+        if not isinstance(keyboard_bindings_raw, dict):
+            raise ValueError('keyboard.bindings must be a mapping')
+        keyboard_bindings = DEFAULT_KEYBOARD_BINDINGS.copy()
+        keyboard_bindings.update(
+            {str(action): str(key) for action, key in keyboard_bindings_raw.items()}
+        )
 
         cfg = cls(
             robot_name=robot_name,
@@ -190,6 +221,15 @@ class RobotRLConfig:
             command_init=_as_float_array(raw.get('command_init'), 3, DEFAULT_COMMAND_INIT),
             command_limits=_as_float_array(raw.get('command_limits'), 3, DEFAULT_COMMAND_LIMITS),
             command_scale=_as_float_array(raw.get('command_scale'), 3, DEFAULT_COMMAND_SCALE),
+            keyboard_bindings=keyboard_bindings,
+            keyboard_speed_levels=_as_float_array(
+                keyboard_raw.get('speed_levels'),
+                3,
+                DEFAULT_KEYBOARD_SPEED_LEVELS,
+            ),
+            keyboard_default_speed_level=int(
+                keyboard_raw.get('default_speed_level', DEFAULT_KEYBOARD_DEFAULT_SPEED_LEVEL)
+            ),
             fall_height_threshold=float(raw.get('fall_height_threshold', DEFAULT_FALL_HEIGHT_THRESHOLD)),
             fall_gravity_z_threshold=float(
                 raw.get('fall_gravity_z_threshold', DEFAULT_FALL_GRAVITY_Z_THRESHOLD)
@@ -237,6 +277,30 @@ class RobotRLConfig:
             raise ValueError('actuator_names length must match num_actions')
         if self.clip_actions <= 0.0:
             raise ValueError('clip_actions must be positive')
+        missing_keyboard_actions = set(DEFAULT_KEYBOARD_BINDINGS) - set(self.keyboard_bindings)
+        if missing_keyboard_actions:
+            raise ValueError(
+                f'Missing keyboard bindings: {", ".join(sorted(missing_keyboard_actions))}'
+            )
+        configured_keys = [
+            self.keyboard_bindings[action]
+            for action in DEFAULT_KEYBOARD_BINDINGS
+        ]
+        if len(set(configured_keys)) != len(configured_keys):
+            raise ValueError('Each keyboard action must use a unique key')
+        if not all(key.startswith('KEY_') for key in configured_keys):
+            raise ValueError('keyboard bindings must use Linux evdev KEY_* names')
+        if (
+            not np.all(np.isfinite(self.keyboard_speed_levels))
+            or np.any(self.keyboard_speed_levels <= 0.0)
+            or np.any(self.keyboard_speed_levels > 1.0)
+            or np.any(np.diff(self.keyboard_speed_levels) <= 0.0)
+        ):
+            raise ValueError(
+                'keyboard.speed_levels must be strictly increasing values in (0, 1]'
+            )
+        if self.keyboard_default_speed_level not in (1, 2, 3):
+            raise ValueError('keyboard.default_speed_level must be 1, 2, or 3')
 
 
 Go2Config = RobotRLConfig

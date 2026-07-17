@@ -19,7 +19,7 @@
 ## 目录说明
 
 - `src/controller/quadruped`：传统 PD 控制节点、FSM、launch、控制参数和消息接口。
-- `src/controller/rl`：RL 本地部署包，包含 MuJoCo runner、观测构造、双推理后端、PD 力矩映射和遥控器输入解析。
+- `src/controller/rl`：RL 本地部署包，包含 MuJoCo runner、观测构造、双推理后端、PD 力矩映射和 Linux 本地键盘输入。
 - `src/input/serial_controller`：QLP 遥控器串口输入，服务于传统 PD ROS2 链路。
 - `src/input/kbd`：键盘备用输入，服务于传统 PD ROS2 链路。
 - `src/robot_gazebo`：Gazebo Classic 仿真资源。
@@ -139,7 +139,7 @@ quadruped_train 训练
 ### 依赖
 
 ```bash
-pip install mujoco torch numpy pyyaml pyserial "onnxruntime>=1.16,<2"
+pip install mujoco torch numpy pyyaml evdev "onnxruntime>=1.16,<2"
 ```
 
 ### 默认文件
@@ -199,22 +199,27 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --no-keyboard \
   --command 0.5 0.0 0.0 \
   --duration 30
 ```
 
-接 QLP 遥控器：
+默认会自动查找当前 Linux 主机可见的本地键盘。需要指定设备时：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
-  --remote-port /dev/ttyUSB0 \
-  --remote-baud-rate 115200
+  --keyboard-device /dev/input/by-path/<设备名>-event-kbd
 ```
+
+设备编号可能在重启后变化，应优先使用 `/dev/input/by-path/*-event-kbd`，不要长期写死 `/dev/input/eventN`。程序读取的是运行主机自己的 evdev 设备；SSH 客户端的按键不会自动转发成远端主机的键盘事件。
+
+不接键盘、仅使用 YAML 或 `--command` 固定命令时传入 `--no-keyboard`。键盘设备打开失败时程序不会进入键盘控制；可执行 `sudo usermod -aG input "$USER"` 并注销后重新登录，或者配置 udev 规则。不要让整个 RL 程序以 root 运行。
 
 打印前几次 policy 推理的调试信息：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --no-keyboard \
   --command 0.0 0.0 0.0 \
   --duration 5 \
   --debug-steps 100
@@ -238,46 +243,35 @@ python3 src/controller/rl/test/compare_policy_backends.py \
 
 该脚本只比较推理输出并返回误差统计，不改变 MuJoCo、观测或 PD。闭环一致性仍需分别运行两个模型观察。
 
-接入 QLP 遥控器做调试：
+接入本地键盘做调试：
 
 ```bash
-python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
+python3 src/controller/rl/test/deploy_mujoco_rl_keyboard_debug.py
 ```
 
-该脚本默认使用 `/dev/ttyUSB0`、`115200` 波特率，运行 30 秒，并打印前 200 次 policy 推理。需要换串口时直接覆盖参数：
+该脚本自动识别键盘，运行 30 秒，并打印前 200 次 policy 推理。需要指定键盘时：
 
 ```bash
-python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py \
-  --remote-port /dev/ttyACM0 \
+python3 src/controller/rl/test/deploy_mujoco_rl_keyboard_debug.py \
+  --keyboard-device /dev/input/by-path/<设备名>-event-kbd \
   --debug-steps 300
 ```
 
-MuJoCo RL 部署当前接入的是 QLP 遥控器输入，不是电脑键盘输入。未传入 `--remote-port` 时，仿真只使用 `--command` 或配置文件里的默认速度命令。
-
-遥控器摇杆映射：
-
-| 输入 | 作用 |
-| --- | --- |
-| 左摇杆 Y | 前进 / 后退 `vx` |
-| 左摇杆 X | 左右平移 `vy` |
-| 右摇杆 X | 偏航速度 `yaw_rate` |
-| 右摇杆 Y | 速度微调 |
-| `mode` | 遥控使能门控，未使能时速度命令清零 |
-
-遥控器按键映射：
+键盘控制启动时默认禁用，先按 `F` 使能。方向键采用按住式控制，松开后对应速度轴立即归零：
 
 | 按键 | 作用 |
 | --- | --- |
-| `f` | 使能控制 |
-| `F` | 重置 MuJoCo 仿真 |
-| `i` | 关闭控制，速度命令清零 |
-| `h` | 站立预设 `[0.0, 0.0, 0.0]` |
-| `b` | 前进预设，默认来自 `command_init` |
-| `g` | 左转预设 |
-| `c` | 右转预设 |
-| `a` | 左移预设 |
-| `u` | 右移预设 |
-| `d` | 打印当前遥控状态 |
+| `W` / `S` | 前进 / 后退 |
+| `A` / `D` | 左移 / 右移 |
+| `Q` / `E` | 左转 / 右转 |
+| `Space` | 立即清零运动命令，方向键释放后才允许再次移动 |
+| `F` | 使能键盘控制；从禁用状态恢复时重置策略历史 |
+| `I` | 禁用键盘控制并清零命令 |
+| `1` / `2` / `3` | 25% / 50% / 100% 速度档位 |
+| `R` | 重置 MuJoCo 仿真 |
+| `P` | 打印当前按键、速度档位和命令 |
+
+方向键可以组合；同一轴的反向键同时按下时该轴输出为零。按键和速度比例统一配置在 `config/go2.yaml` 的 `keyboard` 段。
 
 RL 文件夹的完整结构和每个文件职责见 [src/controller/rl/README.md](src/controller/rl/README.md)。
 
@@ -304,6 +298,7 @@ RL 部署脚本语法检查：
 python3 -m py_compile src/controller/rl/rl_controller/deploy_mujoco_rl.py
 python3 -m py_compile src/controller/rl/rl_controller/core/policy.py
 python3 -m py_compile src/controller/rl/test/compare_policy_backends.py
+python3 -m unittest src/controller/rl/test/test_keyboard_controller.py -v
 ```
 
 ## 边界说明

@@ -19,7 +19,7 @@ MuJoCo state
   -> MuJoCo actuator
 ```
 
-训练侧 critic 使用的 privileged obs 不进入这里的策略输入。部署侧只负责按 YAML 配置构造历史观测并调用所选推理后端；更换 TorchScript / ONNX 后端不会改变观测、动作裁剪、PD、MuJoCo 或遥控器逻辑。
+训练侧 critic 使用的 privileged obs 不进入这里的策略输入。部署侧只负责按 YAML 配置构造历史观测并调用所选推理后端；更换 TorchScript / ONNX 后端不会改变观测、动作裁剪、PD、MuJoCo 或键盘输入逻辑。
 
 ## 目录结构
 
@@ -36,11 +36,12 @@ src/controller/rl/
   rl_controller/
     deploy_mujoco_rl.py
     core/
-    remote/
+    input/
   test/
     compare_policy_backends.py
     deploy_mujoco_rl_debug.py
-    deploy_mujoco_rl_remote_debug.py
+    deploy_mujoco_rl_keyboard_debug.py
+    test_keyboard_controller.py
 ```
 
 ## 顶层文件
@@ -73,6 +74,7 @@ src/controller/rl/
 - 默认关节角：`default_angles`
 - 动作缩放和动作裁剪：`action_scale`、`clip_actions`
 - 初始速度命令和命令限制：`command_init`、`command_limits`
+- Linux 键盘映射和三档速度：`keyboard.bindings`、`keyboard.speed_levels`
 - 跌倒检测阈值：`fall_height_threshold`、`fall_gravity_z_threshold`。`fall_height_threshold <= 0` 表示禁用机身高度检查。
 - 观测缩放：`obs_scale_*`
 - 初始机身位姿：`initial_base_pos`、`initial_base_quat`
@@ -131,12 +133,12 @@ RL 本地部署主入口。
 - 每隔 `control_decimation` 个 MuJoCo step 计算一次 policy action。
 - 把 action 转成 PD 力矩。
 - 写入 MuJoCo actuator。
-- 可选接入 QLP 遥控器。
+- 默认接入当前 Linux 主机可见的本地键盘，也可用 `--no-keyboard` 运行固定命令。
 - 检测摔倒后停止输出力矩，但不退出仿真。
 
 主要类：
 
-- `MujocoRLRunner`：封装 MuJoCo 仿真、策略推理、PD 输出和遥控器输入。
+- `MujocoRLRunner`：封装 MuJoCo 仿真、策略推理、PD 输出和键盘输入。
 - `Go2MujocoRunner`：兼容旧导入的别名，新代码优先使用 `MujocoRLRunner`。
 
 常用命令行参数：
@@ -148,14 +150,12 @@ RL 本地部署主入口。
 | `--policy-backend` | 推理后端：`auto`、`torchscript` 或 `onnx`；默认按模型扩展名选择。 |
 | `--xml-path` | 覆盖 MuJoCo XML 路径。 |
 | `--duration` | 覆盖仿真时长。 |
-| `--command VX VY WZ` | 指定速度命令。 |
+| `--command VX VY WZ` | 指定固定速度命令，需要同时使用 `--no-keyboard`。 |
 | `--device` | 指定推理设备，如 `cpu` 或 `cuda:0`。ONNX 使用 CUDA 时需安装匹配的 `onnxruntime-gpu`。 |
 | `--headless` | 不打开 MuJoCo viewer。 |
 | `--debug-steps N` | 打印前 `N` 次 policy 推理的状态、动作和力矩信息，默认不打印。 |
-| `--remote-port` | 启用 QLP 遥控器串口。 |
-| `--remote-baud-rate` | 遥控器串口波特率。 |
-| `--remote-deadzone` | 摇杆死区。 |
-| `--remote-speed-trim-scale` | 右摇杆 Y 方向速度微调倍率。 |
+| `--keyboard-device` | 手动指定 Linux 键盘 event 设备；默认自动识别。 |
+| `--no-keyboard` | 禁用 evdev 输入，改用 YAML 或 `--command` 固定命令。 |
 
 ## core 模块
 
@@ -236,86 +236,56 @@ action 到力矩的转换模块。
 
 core 模块导出文件，方便外部直接导入 `RobotRLConfig`、`RobotState`、`ObservationHistory` 等核心类型。`Go2Config`、`Go2State`、`Go2ObservationHistory` 仍作为旧名称别名保留。
 
-## remote 模块
+## input 模块
 
-### `rl_controller/remote/qlp_protocol.py`
+RL 仿真输入直接读取运行主机可见的 Linux 键盘 event 设备，不依赖终端焦点或 MuJoCo viewer。它支持笔记本内置键盘以及连接到当前主机的 USB、蓝牙键盘；SSH 客户端按键不会自动成为远端主机的 evdev 事件。
 
-QLP 遥控器串口协议解析模块。
+### `rl_controller/input/keyboard_input.py`
 
-负责内容：
-
-- QLP frame 编解码。
-- CRC16 校验。
-- 流式 parser。
-- joystick report 打包/解包。
-- 将遥控器原始摇杆值归一化到策略命令可用的范围。
-
-### `rl_controller/remote/input.py`
-
-遥控器串口输入线程。
+Linux 键盘设备读取层。
 
 负责内容：
 
-- 打开 `--remote-port` 指定的串口。
-- 后台线程持续读取串口数据。
-- 调用 `QlpStreamParser` 解析 QLP frame。
-- 生成最新 `RemoteSnapshot`。
-- 收集按键事件队列。
-- 记录串口异常，供主循环关闭遥控控制。
+- 优先查找 `/dev/input/by-path/*-event-kbd`。
+- 按配置中的 `KEY_*` 能力筛选正确键盘，也支持 `--keyboard-device` 手动指定。
+- 后台线程读取 `EV_KEY` 的按下、松开和长按事件。
+- 线程安全地保存当前按键集合，并单独记录功能键的按下边沿。
+- 设备断开或读取异常时清空按键，供主循环禁用控制并清零命令。
+- 程序退出时停止线程并关闭输入设备。
 
-`RemoteSnapshot` 包含：
+用户必须拥有 event 设备读取权限。可执行 `sudo usermod -aG input "$USER"` 并注销后重新登录，或者配置 udev 规则；不要用 root 运行完整 RL 控制程序。
 
-```text
-mode / mode_active
-joy_lx / joy_ly / joy_rx / joy_ry
-key
-timestamp
-```
+### `rl_controller/input/keyboard_controller.py`
 
-### `rl_controller/remote/controller.py`
-
-遥控器命令映射模块。
+与具体输入设备、MuJoCo 和策略完全解耦的命令映射层。
 
 负责内容：
 
-- 把摇杆输入转换为速度命令 `[vx, vy, yaw_rate]`。
-- 应用摇杆死区。
-- 应用右摇杆 Y 的速度微调。
-- 根据 `mode_active` 和使能状态决定是否输出命令。
-- 处理按键预设和仿真重置。
+- 将按住的方向键转换为 `[vx, vy, yaw_rate]`。
+- 支持多方向组合和同轴反向键抵消。
+- 应用 YAML 中配置的 25%、50%、100% 三档速度。
+- 根据使能状态输出命令，并按 `command_limits` 裁剪。
+- 处理停止、重新使能、MuJoCo 重置和状态打印等边沿事件。
 
-说明：当前 MuJoCo RL 部署接入的是 QLP 遥控器输入，不是电脑键盘输入。电脑键盘没有单独写 viewer 回调；未传入 `--remote-port` 时，仿真只使用 `--command` 或 YAML 配置里的默认速度命令。
-
-默认摇杆映射：
-
-| 输入 | 作用 |
-| --- | --- |
-| 左摇杆 Y | 前进 / 后退 `vx` |
-| 左摇杆 X | 左右平移 `vy` |
-| 右摇杆 X | 偏航速度 `yaw_rate` |
-| 右摇杆 Y | 速度微调 |
-| `mode` | 遥控使能门控，未使能时速度命令清零 |
-
-摇杆命令会叠加在当前 `base_command` 上，并按配置里的 `command_limits` 裁剪。当前 Go2 配置中 `command_limits` 为 `[1.0, 1.0, 1.0]`，单位分别是 `[m/s, m/s, rad/s]`。
-
-默认按键：
+键盘控制启动时默认禁用，需要先按 `F`。默认绑定如下：
 
 | 按键 | 作用 |
 | --- | --- |
-| `f` | 使能控制 |
-| `F` | 重置 MuJoCo 仿真 |
-| `i` | 关闭控制，速度命令清零 |
-| `h` | 站立预设 `[0.0, 0.0, 0.0]` |
-| `b` | 前进预设，默认来自 `command_init`，当前 Go2 是 `[0.5, 0.0, 0.0]` |
-| `g` | 左转预设，当前 Go2 约为 `[0.0, 0.0, 0.5]` |
-| `c` | 右转预设，当前 Go2 约为 `[0.0, 0.0, -0.5]` |
-| `a` | 左移预设，当前 Go2 约为 `[0.0, 0.5, 0.0]` |
-| `u` | 右移预设，当前 Go2 约为 `[0.0, -0.5, 0.0]` |
-| `d` | 打印当前遥控状态 |
+| `W` / `S` | 前进 / 后退 |
+| `A` / `D` | 左移 / 右移 |
+| `Q` / `E` | 左转 / 右转 |
+| `Space` | 清零运动命令；已按住的方向键释放前保持停止 |
+| `F` | 使能；从禁用状态恢复时重置 history 和 `last_action` |
+| `I` | 禁用并清零命令 |
+| `1` / `2` / `3` | 低速 / 中速 / 高速 |
+| `R` | 重置 MuJoCo 仿真 |
+| `P` | 打印按键、档位和当前命令 |
 
-### `rl_controller/remote/__init__.py`
+普通方向键的按下和松开只改变 command，不重置 history、`last_action` 或策略状态。
 
-remote 模块导出文件，供 `deploy_mujoco_rl.py` 直接导入 `QlpRemoteInput` 和 `RemoteCommandController`。
+### `rl_controller/input/__init__.py`
+
+input 模块导出文件，供 `deploy_mujoco_rl.py` 导入 `KeyboardInput` 和 `KeyboardCommandController`。
 
 ## test 目录
 
@@ -326,6 +296,7 @@ MuJoCo RL 部署调试脚本。
 默认参数：
 
 ```text
+--no-keyboard
 --command 0.0 0.0 0.0
 --duration 5
 --debug-steps 100
@@ -354,21 +325,22 @@ target_joint_pos
 
 其中 `raw_action` 是当前推理后端的原始输出，`clipped_action` 是部署侧按 YAML 中 `clip_actions` 裁剪后实际送入 PD 的动作。当前 Go2 为 `clip_actions: 100.0`，正常情况下二者应基本一致；如果训练侧修改了 `normalization.clip_actions`，部署侧也要同步。
 
-### `test/deploy_mujoco_rl_remote_debug.py`
+### `test/deploy_mujoco_rl_keyboard_debug.py`
 
-带 QLP 遥控器输入的 MuJoCo RL 调试脚本。
+带 Linux 本地键盘输入的 MuJoCo RL 调试脚本。
 
 默认参数：
 
 ```text
---command 0.0 0.0 0.0
 --duration 30
 --debug-steps 200
---remote-port /dev/ttyUSB0
---remote-baud-rate 115200
 ```
 
-该脚本适合在遥控器控制时观察策略输入和输出是否连续变化。运行后可以通过遥控器的 `mode`、摇杆和按键改变速度命令；脚本会打印 policy 推理时的状态、动作和力矩。
+脚本默认自动识别当前主机键盘，适合观察按键命令、策略输入和动作是否连续变化。必要时可传入 `--keyboard-device /dev/input/by-path/...-event-kbd`。
+
+### `test/test_keyboard_controller.py`
+
+不访问实际键盘和 MuJoCo 的命令映射单元测试，覆盖初始禁用、使能、组合键、反向抵消、三档速度、Space 停止锁存、禁用清零和仿真重置事件。
 
 ### `test/compare_policy_backends.py`
 
@@ -379,15 +351,21 @@ TorchScript / ONNX 离线输出一致性检查脚本。它向两个模型输入�
 常用命令：
 
 ```bash
-python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
+python3 src/controller/rl/test/deploy_mujoco_rl_keyboard_debug.py
 ```
 
-覆盖串口或打印步数：
+覆盖键盘设备或打印步数：
 
 ```bash
-python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py \
-  --remote-port /dev/ttyACM0 \
+python3 src/controller/rl/test/deploy_mujoco_rl_keyboard_debug.py \
+  --keyboard-device /dev/input/by-path/<设备名>-event-kbd \
   --debug-steps 300
+```
+
+运行命令映射测试：
+
+```bash
+python3 -m unittest src/controller/rl/test/test_keyboard_controller.py -v
 ```
 
 ## 运行方式
@@ -401,7 +379,7 @@ pip install -e src/controller/rl
 CPU 版安装会包含 `onnxruntime`。如果只补装依赖：
 
 ```bash
-pip install mujoco torch numpy pyyaml pyserial "onnxruntime>=1.16,<2"
+pip install mujoco torch numpy pyyaml evdev "onnxruntime>=1.16,<2"
 ```
 
 再把训练直接导出的两个策略放到：
@@ -446,22 +424,23 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --no-keyboard \
   --command 0.5 0.0 0.0 \
   --duration 30
 ```
 
-接 QLP 遥控器：
+默认自动查找本地 Linux 键盘。手动指定键盘设备：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
-  --remote-port /dev/ttyUSB0 \
-  --remote-baud-rate 115200
+  --keyboard-device /dev/input/by-path/<设备名>-event-kbd
 ```
 
 打印前 100 次 policy 推理的调试信息：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --no-keyboard \
   --command 0.0 0.0 0.0 \
   --duration 5 \
   --debug-steps 100
@@ -473,10 +452,10 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
 python3 src/controller/rl/test/deploy_mujoco_rl_debug.py
 ```
 
-使用遥控器调试脚本：
+使用键盘调试脚本：
 
 ```bash
-python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
+python3 src/controller/rl/test/deploy_mujoco_rl_keyboard_debug.py
 ```
 
 比较两个模型的离线动作输出：
@@ -521,7 +500,7 @@ python3 src/controller/rl/test/compare_policy_backends.py \
 - 当前力矩清零。
 - history buffer 重置。
 - MuJoCo 仿真继续运行。
-- 遥控器按 `F` 可以重置仿真。
+- 键盘按 `R` 可以重置仿真。
 
 ## 常用检查
 
@@ -533,6 +512,9 @@ python3 -m py_compile src/controller/rl/rl_controller/core/config.py
 python3 -m py_compile src/controller/rl/rl_controller/core/observer.py
 python3 -m py_compile src/controller/rl/rl_controller/core/pd.py
 python3 -m py_compile src/controller/rl/rl_controller/core/policy.py
+python3 -m py_compile src/controller/rl/rl_controller/input/keyboard_input.py
+python3 -m py_compile src/controller/rl/rl_controller/input/keyboard_controller.py
+python3 -m unittest src/controller/rl/test/test_keyboard_controller.py -v
 ```
 
 配置读取检查：

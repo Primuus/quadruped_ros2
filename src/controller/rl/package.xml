@@ -10,7 +10,7 @@
   <depend>ament_index_python</depend>
   <depend>python3-numpy</depend>
   <depend>python3-yaml</depend>
-  <depend>python3-serial</depend>
+  <depend>python3-evdev</depend>
 
   <export>
     <build_type>ament_python</build_type>

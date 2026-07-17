@@ -128,6 +128,31 @@ command_scale:
   - 2.0
   - 0.25
 
+# 当前 Linux 主机键盘的 evdev 映射；内置键盘和外接键盘使用相同规则
+keyboard:
+  bindings:
+    forward: KEY_W
+    backward: KEY_S
+    left: KEY_A
+    right: KEY_D
+    turn_left: KEY_Q
+    turn_right: KEY_E
+    stop: KEY_SPACE
+    enable: KEY_F
+    disable: KEY_I
+    speed_low: KEY_1
+    speed_medium: KEY_2
+    speed_high: KEY_3
+    reset_sim: KEY_R
+    print_status: KEY_P
+  # 低速、中速和高速分别占 command_limits 的比例
+  speed_levels:
+    - 0.25
+    - 0.5
+    - 1.0
+  # 启动时使用中速档；键盘控制本身仍需按 F 使能
+  default_speed_level: 2
+
 # 跌倒判定阈值：机身高度；设置为 0 或负数表示禁用高度检查
 fall_height_threshold: 0.0
 # 跌倒判定阈值：重力方向投影

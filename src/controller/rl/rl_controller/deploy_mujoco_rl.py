@@ -17,7 +17,7 @@ from rl_controller.core.config import RobotRLConfig, default_config_path
 from rl_controller.core.observer import ObservationHistory, RobotState, quat_rotate_inverse
 from rl_controller.core.pd import compute_torques
 from rl_controller.core.policy import load_policy
-from rl_controller.remote import QlpRemoteInput, RemoteCommandController
+from rl_controller.input import KeyboardCommandController, KeyboardInput
 
 GRAVITY_VECTOR = np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
@@ -28,8 +28,8 @@ class MujocoRLRunner:
         cfg: RobotRLConfig,
         device: str = 'cpu',
         policy_backend: str = 'auto',
-        remote_input: QlpRemoteInput | None = None,
-        remote_controller: RemoteCommandController | None = None,
+        keyboard_input: KeyboardInput | None = None,
+        keyboard_controller: KeyboardCommandController | None = None,
         debug_steps: int = 0,
     ) -> None:
         self.cfg = cfg
@@ -37,8 +37,8 @@ class MujocoRLRunner:
         self.model.opt.timestep = cfg.simulation_dt
         self.data = mujoco.MjData(self.model)
         self.policy = load_policy(cfg.policy_path, backend=policy_backend, device=device)
-        self.remote_input = remote_input
-        self.remote_controller = remote_controller
+        self.keyboard_input = keyboard_input
+        self.keyboard_controller = keyboard_controller
         print(f'Policy backend: {self.policy.backend_name}')
         print(f'Policy model: {cfg.policy_path}')
 
@@ -47,8 +47,8 @@ class MujocoRLRunner:
         self.actuator_ids = self._resolve_actuator_ids()
         self.actuator_torque_limits = self._resolve_actuator_torque_limits()
 
-        if self.remote_controller is not None:
-            self.command = self.remote_controller.current_command.copy()
+        if self.keyboard_controller is not None:
+            self.command = self.keyboard_controller.current_command.copy()
         else:
             self.command = np.clip(cfg.command_init.copy(), -cfg.command_limits, cfg.command_limits)
         self.last_action = np.zeros(cfg.num_actions, dtype=np.float32)
@@ -57,7 +57,6 @@ class MujocoRLRunner:
         self.target_joint_pos = cfg.default_angles.copy()
         self.is_fallen = False
         self._fall_reason: str | None = None
-        self._last_remote_mode_active: bool | None = None
         self.debug_steps = max(0, int(debug_steps))
         self._debug_policy_steps = 0
 
@@ -207,34 +206,36 @@ class MujocoRLRunner:
         self.observation_history.reset()
         self.current_torque.fill(0.0)
 
-    def _process_remote_input(self) -> None:
-        if self.remote_input is None or self.remote_controller is None:
+    def _process_keyboard_input(self) -> None:
+        if self.keyboard_input is None or self.keyboard_controller is None:
             return
 
-        if self.remote_input.last_error is not None:
-            print(f'remote input stopped, disable remote control: {self.remote_input.last_error}')
-            self.remote_input = None
-            self.remote_controller.enabled = False
-            self.remote_controller.current_command.fill(0.0)
+        if self.keyboard_input.last_error is not None:
+            print(
+                'keyboard input stopped; control disabled and command cleared: '
+                f'{self.keyboard_input.last_error}'
+            )
+            self.keyboard_input = None
+            self.keyboard_controller.disable()
             self.command.fill(0.0)
             return
 
-        for key in self.remote_input.drain_key_events():
-            effect = self.remote_controller.apply_key(key)
+        print_status = False
+        for key in self.keyboard_input.drain_key_events():
+            effect = self.keyboard_controller.apply_key(key)
             if effect.log_message:
                 print(effect.log_message)
-            if effect.zero_last_action:
+            if effect.reset_policy_state:
                 self.last_action.fill(0.0)
                 self.observation_history.reset()
             if effect.reset_sim:
                 self._reset_state()
+            print_status = print_status or effect.print_status
 
-        snapshot = self.remote_input.latest_snapshot()
-        if snapshot is not None and snapshot.mode_active != self._last_remote_mode_active:
-            print(f'Remote mode: {1.0 if snapshot.mode_active else 0.0}')
-            self._last_remote_mode_active = snapshot.mode_active
-
-        self.command = self.remote_controller.update_snapshot(snapshot)
+        snapshot = self.keyboard_input.latest_snapshot()
+        self.command = self.keyboard_controller.update_pressed_keys(snapshot.pressed_keys)
+        if print_status:
+            print(self.keyboard_controller.describe(snapshot.pressed_keys))
 
     def _write_control(self) -> None:
         self.data.ctrl[:] = 0.0
@@ -256,7 +257,7 @@ class MujocoRLRunner:
         for step in range(total_steps):
             step_start = time.time()
 
-            self._process_remote_input()
+            self._process_keyboard_input()
             if step % decimation == 0:
                 self._compute_policy_output()
 
@@ -302,14 +303,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0,
         help='Print state/action/torque details for the first N policy steps. Default: 0.',
     )
-    parser.add_argument('--remote-port', type=str, default=None, help='QLP remote serial device.')
-    parser.add_argument('--remote-baud-rate', type=int, default=115200, help='QLP remote serial baud rate.')
-    parser.add_argument('--remote-deadzone', type=float, default=0.12, help='Deadzone applied to remote sticks.')
     parser.add_argument(
-        '--remote-speed-trim-scale',
-        type=float,
-        default=0.5,
-        help='Scale factor for the right stick Y speed trim.',
+        '--keyboard-device',
+        type=Path,
+        default=None,
+        help='Linux keyboard event device. Default: auto-detect a readable *-event-kbd device.',
+    )
+    parser.add_argument(
+        '--no-keyboard',
+        action='store_true',
+        help='Disable evdev keyboard input and use the YAML/--command fixed command.',
     )
     return parser
 
@@ -317,11 +320,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    if args.no_keyboard and args.keyboard_device is not None:
+        parser.error('--keyboard-device cannot be combined with --no-keyboard')
+    if args.command is not None and not args.no_keyboard:
+        parser.error('--command is a fixed command and requires --no-keyboard')
 
     config_path = args.config or default_config_path()
     cfg = RobotRLConfig.from_yaml(config_path)
-    forward_preset = cfg.command_init.copy()
-
     if args.policy_path is not None:
         cfg = replace(cfg, policy_path=Path(args.policy_path).expanduser().resolve())
     if args.xml_path is not None:
@@ -332,37 +337,37 @@ def main(argv: list[str] | None = None) -> None:
         command = np.asarray(args.command, dtype=np.float32)
         cfg = replace(cfg, command_init=np.clip(command, -cfg.command_limits, cfg.command_limits))
 
-    remote_input = None
-    remote_controller = None
-    if args.remote_port is not None:
-        initial_command = np.zeros(3, dtype=np.float32)
-        if args.command is not None:
-            initial_command = np.clip(np.asarray(args.command, dtype=np.float32), -cfg.command_limits, cfg.command_limits)
-
-        remote_input = QlpRemoteInput(args.remote_port, args.remote_baud_rate)
-        remote_controller = RemoteCommandController(
+    keyboard_input = None
+    keyboard_controller = None
+    if not args.no_keyboard:
+        keyboard_controller = KeyboardCommandController(
             command_limits=cfg.command_limits,
-            forward_preset=forward_preset,
-            initial_command=initial_command,
-            deadzone=args.remote_deadzone,
-            speed_trim_scale=args.remote_speed_trim_scale,
+            bindings=cfg.keyboard_bindings,
+            speed_levels=cfg.keyboard_speed_levels,
+            default_speed_level=cfg.keyboard_default_speed_level,
         )
-        print(f'Remote input enabled: {args.remote_port} @ {args.remote_baud_rate}')
-        print(f'Remote initial command: {remote_controller.base_command}')
+        keyboard_input = KeyboardInput(
+            args.keyboard_device,
+            tracked_keys=keyboard_controller.tracked_keys,
+        )
+        print(f'Keyboard input: {keyboard_input.device_name} ({keyboard_input.device_path})')
+        print('Keyboard control starts disabled; press F to enable it.')
+    else:
+        print(f'Keyboard input disabled; fixed command: {cfg.command_init}')
 
-    runner = MujocoRLRunner(
-        cfg,
-        device=args.device,
-        policy_backend=args.policy_backend,
-        remote_input=remote_input,
-        remote_controller=remote_controller,
-        debug_steps=args.debug_steps,
-    )
     try:
+        runner = MujocoRLRunner(
+            cfg,
+            device=args.device,
+            policy_backend=args.policy_backend,
+            keyboard_input=keyboard_input,
+            keyboard_controller=keyboard_controller,
+            debug_steps=args.debug_steps,
+        )
         runner.run(headless=args.headless)
     finally:
-        if remote_input is not None:
-            remote_input.close()
+        if keyboard_input is not None:
+            keyboard_input.close()
 
 
 Go2MujocoRunner = MujocoRLRunner
