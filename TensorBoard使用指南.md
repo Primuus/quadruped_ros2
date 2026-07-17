@@ -319,11 +319,11 @@ soft_dof_pos_limit = 0.9
 足端抬脚约束。当前已经打开：
 
 ```python
-enable_foot_clearance = True
-enable_rigid_body_state_rewards = True
 foot_clearance = -0.01
 clearance_height_target = -0.20
 ```
+
+`foot_clearance` 权重非零时，训练环境会自动获取并刷新所需的 rigid-body state。
 
 这项是惩罚项，通常是负值。不要简单理解为越高越好，要结合实际画面看。
 

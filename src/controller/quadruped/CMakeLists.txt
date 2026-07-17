@@ -283,32 +283,6 @@ target_link_libraries(quadruped_node
     quadruped__rosidl_generator_c
 )
 
-# ================== Test Executable ==================
-# 独立的新功能测试入口，不依赖ROS2节点启动
-add_executable(test_new_feature
-    test/test_new_feature.cpp
-)
-target_include_directories(test_new_feature PRIVATE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-    ${EIGEN3_INCLUDE_DIR}
-)
-ament_target_dependencies(test_new_feature
-    rclcpp
-    std_msgs
-    geometry_msgs
-)
-target_link_libraries(test_new_feature
-    quadruped_common
-    quadruped_math
-    quadruped_motor
-    quadruped_leg
-    quadruped_motion
-    quadruped_fsm
-    quadruped_phase
-    logger::logger
-)
-
 # ================== ROS2 Messages and Services ==================
 rosidl_generate_interfaces(${PROJECT_NAME}
     "msg/MotorCommand.msg"
