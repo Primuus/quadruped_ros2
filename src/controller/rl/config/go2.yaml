@@ -25,7 +25,7 @@ history_length: 6
 num_obs: 270
 # 训练 critic 的单帧特权观测维度：45 + base_lin_vel3 + 外力3 + 高度187；部署 actor 不使用
 num_one_step_privileged_obs: 238
-# 训练 critic 输入维度；部署侧只用于配置对齐和检查，不输入 TorchScript actor
+# 训练 critic 输入维度；部署侧只用于配置对齐和检查，不输入部署 policy
 num_privileged_obs: 238
 # 观测模式：6 帧 45 维历史观测，当前 estimator+actor 导出模型也必须保持这个外部输入
 obs_mode: quadruped_history_45x6

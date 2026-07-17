@@ -16,7 +16,7 @@ import numpy as np
 from rl_controller.core.config import RobotRLConfig, default_config_path
 from rl_controller.core.observer import ObservationHistory, RobotState, quat_rotate_inverse
 from rl_controller.core.pd import compute_torques
-from rl_controller.core.policy import TorchScriptPolicy
+from rl_controller.core.policy import load_policy
 from rl_controller.remote import QlpRemoteInput, RemoteCommandController
 
 GRAVITY_VECTOR = np.array([0.0, 0.0, -1.0], dtype=np.float32)
@@ -27,6 +27,7 @@ class MujocoRLRunner:
         self,
         cfg: RobotRLConfig,
         device: str = 'cpu',
+        policy_backend: str = 'auto',
         remote_input: QlpRemoteInput | None = None,
         remote_controller: RemoteCommandController | None = None,
         debug_steps: int = 0,
@@ -35,9 +36,11 @@ class MujocoRLRunner:
         self.model = mujoco.MjModel.from_xml_path(str(cfg.xml_path))
         self.model.opt.timestep = cfg.simulation_dt
         self.data = mujoco.MjData(self.model)
-        self.policy = TorchScriptPolicy(cfg.policy_path, device=device)
+        self.policy = load_policy(cfg.policy_path, backend=policy_backend, device=device)
         self.remote_input = remote_input
         self.remote_controller = remote_controller
+        print(f'Policy backend: {self.policy.backend_name}')
+        print(f'Policy model: {cfg.policy_path}')
 
         self.joint_qpos_adr = self._resolve_joint_qpos_adr()
         self.joint_qvel_adr = self._resolve_joint_qvel_adr()
@@ -275,6 +278,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Run a quadruped RL policy in MuJoCo.')
     parser.add_argument('--config', type=Path, default=None, help='Path to the robot YAML config.')
     parser.add_argument('--policy-path', type=Path, default=None, help='Override policy path.')
+    parser.add_argument(
+        '--policy-backend',
+        choices=('auto', 'torchscript', 'onnx'),
+        default='auto',
+        help='Policy inference backend. Default: infer from the model file extension.',
+    )
     parser.add_argument('--xml-path', type=Path, default=None, help='Override MuJoCo XML path.')
     parser.add_argument('--duration', type=float, default=None, help='Override simulation duration in seconds.')
     parser.add_argument(
@@ -285,7 +294,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help='Override command vector [m/s, m/s, rad/s].',
     )
-    parser.add_argument('--device', type=str, default='cpu', help='Torch device used for policy inference.')
+    parser.add_argument('--device', type=str, default='cpu', help='Policy inference device, for example cpu or cuda:0.')
     parser.add_argument('--headless', action='store_true', help='Run without the MuJoCo viewer.')
     parser.add_argument(
         '--debug-steps',
@@ -344,6 +353,7 @@ def main(argv: list[str] | None = None) -> None:
     runner = MujocoRLRunner(
         cfg,
         device=args.device,
+        policy_backend=args.policy_backend,
         remote_input=remote_input,
         remote_controller=remote_controller,
         debug_steps=args.debug_steps,

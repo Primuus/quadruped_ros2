@@ -1,6 +1,6 @@
 # RL 本地部署子工程说明
 
-`src/controller/rl` 是 `quadruped` 中的 RL 本地部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`，主要作用是在本地 MuJoCo 中加载 `quadruped_train` 导出的 TorchScript 策略，验证四足机器人策略的运动效果。
+`src/controller/rl` 是 `quadruped` 中的 RL 本地部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`，主要作用是在本地 MuJoCo 中加载 `quadruped_train` 从同一个部署模型直接导出的 TorchScript 或 ONNX 策略，验证四足机器人策略的运动效果。
 
 当前已经接入的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、MuJoCo 资源和策略文件，而不是复制部署主循环。当前 RL 部署不包含训练代码，也不包含实机 sim-to-real 输出链路。
 
@@ -11,14 +11,15 @@ MuJoCo state
   -> RobotState
   -> 45 维单帧观测
   -> history buffer，形成 num_obs 维 policy 输入
-  -> TorchScript policy(estimator + actor)
+  -> policy backend：TorchScript / ONNX Runtime
+  -> estimator + actor
   -> num_actions 维 action
   -> action_scale + default_angles，得到目标关节角
   -> PD 计算力矩
   -> MuJoCo actuator
 ```
 
-训练侧 critic 使用的 privileged obs 不进入这里的策略输入。部署侧只负责按 YAML 配置构造历史观测并调用 TorchScript。
+训练侧 critic 使用的 privileged obs 不进入这里的策略输入。部署侧只负责按 YAML 配置构造历史观测并调用所选推理后端；更换 TorchScript / ONNX 后端不会改变观测、动作裁剪、PD、MuJoCo 或遥控器逻辑。
 
 ## 目录结构
 
@@ -37,6 +38,7 @@ src/controller/rl/
     core/
     remote/
   test/
+    compare_policy_backends.py
     deploy_mujoco_rl_debug.py
     deploy_mujoco_rl_remote_debug.py
 ```
@@ -78,17 +80,18 @@ src/controller/rl/
 修改原则：
 
 - 训练侧改了 PD、默认角、action scale、clip actions 或观测缩放时，这里要同步。
-- 部署侧 policy 外部输入必须和训练导出的 TorchScript 输入维度一致。
-- privileged obs 只用于配置对齐和检查，不会输入 TorchScript policy。
+- 部署侧 policy 外部输入必须和训练导出的模型输入维度一致。
+- privileged obs 只用于配置对齐和检查，不会输入部署 policy。
 
 ## 策略文件
 
 ### `models/`
 
-默认策略目录。仓库不内置训练好的策略，训练完成后把导出的 TorchScript 放到：
+默认策略目录。仓库不内置训练好的策略，训练完成后把从同一个 `estimator + actor` 直接导出的两个模型放到：
 
 ```text
 models/policy_1.pt
+models/policy_1.onnx
 ```
 
 相关文件：
@@ -96,7 +99,7 @@ models/policy_1.pt
 - `models/.gitignore`：避免误提交模型权重。
 - `models/README.md`：说明模型目录的用途。
 
-策略必须来自当前训练框架导出的 `estimator + actor` TorchScript，外部输入维度要和对应 YAML 中的 `num_obs` 一致。当前 Go2 策略为 270 维历史观测。
+`policy_1.pt` 是过渡期的 TorchScript 基准，`policy_1.onnx` 是 ONNX Runtime 模型。两者权重来源、外部输入和动作输出应一致；ONNX 必须从 PyTorch `estimator + actor` 直接导出，不经过 TorchScript 二次转换。当前 Go2 策略输入为 270 维历史观测，输出为 12 维动作。
 
 ## MuJoCo 资源
 
@@ -122,7 +125,7 @@ RL 本地部署主入口。
 
 - 读取机器人 YAML 配置，默认是 `go2.yaml`。
 - 加载 MuJoCo 模型。
-- 加载 TorchScript policy。
+- 根据模型扩展名或 `--policy-backend` 加载 TorchScript / ONNX policy。
 - 解析关节和 actuator 索引。
 - 初始化仿真状态。
 - 每隔 `control_decimation` 个 MuJoCo step 计算一次 policy action。
@@ -142,10 +145,11 @@ RL 本地部署主入口。
 | --- | --- |
 | `--config` | 指定 YAML 配置文件。 |
 | `--policy-path` | 覆盖策略文件路径。 |
+| `--policy-backend` | 推理后端：`auto`、`torchscript` 或 `onnx`；默认按模型扩展名选择。 |
 | `--xml-path` | 覆盖 MuJoCo XML 路径。 |
 | `--duration` | 覆盖仿真时长。 |
 | `--command VX VY WZ` | 指定速度命令。 |
-| `--device` | 指定 Torch 推理设备，如 `cpu` 或 `cuda:0`。 |
+| `--device` | 指定推理设备，如 `cpu` 或 `cuda:0`。ONNX 使用 CUDA 时需安装匹配的 `onnxruntime-gpu`。 |
 | `--headless` | 不打开 MuJoCo viewer。 |
 | `--debug-steps N` | 打印前 `N` 次 policy 推理的状态、动作和力矩信息，默认不打印。 |
 | `--remote-port` | 启用 QLP 遥控器串口。 |
@@ -193,17 +197,18 @@ RL 本地部署主入口。
 
 ### `rl_controller/core/policy.py`
 
-TorchScript 策略加载和推理模块。
+策略推理后端模块。MuJoCo runner 只依赖统一的 `infer(observation)` 接口，不直接依赖具体模型格式。
 
 负责内容：
 
-- 加载 `policy_1.pt`。
-- 设置推理设备。
-- 把 numpy observation 转成 Torch tensor。
-- 调用 TorchScript model。
-- 把输出转回 numpy action。
+- `Policy`：统一推理协议。
+- `TorchScriptPolicy`：加载 `.pt` 并执行 PyTorch/TorchScript 推理。
+- `OnnxRuntimePolicy`：加载 `.onnx` 并执行 ONNX Runtime 推理。
+- `resolve_policy_backend()`：在 `auto` 模式下根据 `.pt` / `.onnx` 扩展名选择后端。
+- `load_policy()`：创建对应后端实例。
+- 将输入统一转换为连续的单帧 `float32` numpy 向量，并将输出统一转换为一维 `float32` action。
 
-如果 TorchScript 输出是 tuple/list，会默认取第一个输出作为 action。
+TorchScript 输出如果是 tuple/list，会取第一个输出作为 action。ONNX 模型必须只有一个输入，部署侧使用第一个输出作为 action。
 
 ### `rl_controller/core/pd.py`
 
@@ -347,7 +352,7 @@ torques
 target_joint_pos
 ```
 
-其中 `raw_action` 是 TorchScript policy 原始输出，`clipped_action` 是部署侧按 YAML 中 `clip_actions` 裁剪后实际送入 PD 的动作。当前 Go2 为 `clip_actions: 100.0`，正常情况下二者应基本一致；如果训练侧修改了 `normalization.clip_actions`，部署侧也要同步。
+其中 `raw_action` 是当前推理后端的原始输出，`clipped_action` 是部署侧按 YAML 中 `clip_actions` 裁剪后实际送入 PD 的动作。当前 Go2 为 `clip_actions: 100.0`，正常情况下二者应基本一致；如果训练侧修改了 `normalization.clip_actions`，部署侧也要同步。
 
 ### `test/deploy_mujoco_rl_remote_debug.py`
 
@@ -365,6 +370,12 @@ target_joint_pos
 
 该脚本适合在遥控器控制时观察策略输入和输出是否连续变化。运行后可以通过遥控器的 `mode`、摇杆和按键改变速度命令；脚本会打印 policy 推理时的状态、动作和力矩。
 
+### `test/compare_policy_backends.py`
+
+TorchScript / ONNX 离线输出一致性检查脚本。它向两个模型输入完全相同的 `float32` 历史观测，打印平均绝对误差、最大绝对误差和 `allclose` 结果；比较失败时退出码为 1。
+
+默认随机生成 128 组 `num_obs` 维输入，也可以用 `--observations observations.npy` 输入真实 MuJoCo 观测。该脚本只检查模型推理，不运行 MuJoCo，也不改变部署配置。
+
 常用命令：
 
 ```bash
@@ -381,10 +392,23 @@ python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py \
 
 ## 运行方式
 
-先把训练导出的策略放到：
+先安装部署依赖：
 
 ```bash
+pip install -e src/controller/rl
+```
+
+CPU 版安装会包含 `onnxruntime`。如果只补装依赖：
+
+```bash
+pip install mujoco torch numpy pyyaml pyserial "onnxruntime>=1.16,<2"
+```
+
+再把训练直接导出的两个策略放到：
+
+```text
 src/controller/rl/models/policy_1.pt
+src/controller/rl/models/policy_1.onnx
 ```
 
 从 `quadruped` 仓库根目录运行：
@@ -407,6 +431,16 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --xml-path src/controller/rl/resources/robots/go2/scene.xml \
   --device cpu
 ```
+
+运行 ONNX Runtime 后端：
+
+```bash
+python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
+  --policy-path src/controller/rl/models/policy_1.onnx \
+  --device cpu
+```
+
+默认 `--policy-backend auto`：`.pt` 选择 TorchScript，`.onnx` 选择 ONNX Runtime。需要排查模型命名问题时可显式传入 `--policy-backend torchscript` 或 `--policy-backend onnx`。
 
 指定速度命令：
 
@@ -445,6 +479,23 @@ python3 src/controller/rl/test/deploy_mujoco_rl_debug.py
 python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
 ```
 
+比较两个模型的离线动作输出：
+
+```bash
+python3 src/controller/rl/test/compare_policy_backends.py \
+  --torchscript-path src/controller/rl/models/policy_1.pt \
+  --onnx-path src/controller/rl/models/policy_1.onnx
+```
+
+用保存的真实观测比较：
+
+```bash
+python3 src/controller/rl/test/compare_policy_backends.py \
+  --observations observations.npy
+```
+
+完成离线输出比较后，应使用相同 YAML、初始状态和速度命令分别运行 `.pt` 与 `.onnx`，确认 MuJoCo 闭环行为一致。这个阶段通过后再进入 C++ + ONNX Runtime + SDK2 实机部署。
+
 ## 和训练侧的同步关系
 
 训练侧改动后，需要同步部署侧的情况：
@@ -458,6 +509,7 @@ python3 src/controller/rl/test/deploy_mujoco_rl_remote_debug.py
 - 改了 PD 参数。
 - 改了命令缩放或观测缩放。
 - 改了导出策略的外部输入格式。
+- 改了 estimator 或 actor 的部署结构，必须重新直接导出 `.pt` 和 `.onnx`，不能由其中一种格式转换另一种。
 
 训练侧只改 critic privileged obs 内容、reward 权重、噪声、域随机化时，通常不需要改部署推理逻辑；但配置说明应保持一致。
 

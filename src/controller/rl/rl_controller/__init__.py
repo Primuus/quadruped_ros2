@@ -8,4 +8,10 @@ from .core.observer import (
     build_one_step_observation,
 )
 from .core.pd import compute_torques
-from .core.policy import TorchScriptPolicy
+from .core.policy import (
+    OnnxRuntimePolicy,
+    Policy,
+    TorchScriptPolicy,
+    load_policy,
+    resolve_policy_backend,
+)
