@@ -223,6 +223,17 @@ class MujocoRLRunner:
         print_status = False
         for key in self.keyboard_input.drain_key_events():
             effect = self.keyboard_controller.apply_key(key)
+            if effect.exclusive_input is not None:
+                try:
+                    self.keyboard_input.set_exclusive(effect.exclusive_input)
+                except RuntimeError as exc:
+                    self.keyboard_controller.disable()
+                    self.command.fill(0.0)
+                    print(
+                        'keyboard control remains disabled because exclusive input failed: '
+                        f'{exc}'
+                    )
+                    continue
             if effect.log_message:
                 print(effect.log_message)
             if effect.reset_policy_state:
@@ -307,7 +318,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         '--keyboard-device',
         type=Path,
         default=None,
-        help='Linux keyboard event device. Default: auto-detect a readable *-event-kbd device.',
+        help='Linux keyboard event device. Default: listen to all readable keyboard devices.',
     )
     parser.add_argument(
         '--no-keyboard',
@@ -350,8 +361,14 @@ def main(argv: list[str] | None = None) -> None:
             args.keyboard_device,
             tracked_keys=keyboard_controller.tracked_keys,
         )
-        print(f'Keyboard input: {keyboard_input.device_name} ({keyboard_input.device_path})')
-        print('Keyboard control starts disabled; press F to enable it.')
+        print(f'Keyboard inputs: {len(keyboard_input.device_paths)} device(s)')
+        for device_name, device_path in zip(
+            keyboard_input.device_names,
+            keyboard_input.device_paths,
+        ):
+            print(f'  - {device_name} ({device_path})')
+        print('Keyboard control starts disabled; press F to enable and grab the keyboards.')
+        print('Press I to disable control and release the keyboards.')
     else:
         print(f'Keyboard input disabled; fixed command: {cfg.command_init}')
 

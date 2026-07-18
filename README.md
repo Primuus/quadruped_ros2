@@ -204,7 +204,7 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --duration 30
 ```
 
-默认会自动查找当前 Linux 主机可见的本地键盘。需要指定设备时：
+默认会自动查找并同时监听当前 Linux 主机上所有具备完整控制按键的本地键盘。需要限制为某一个设备时：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
@@ -257,7 +257,7 @@ python3 src/controller/rl/test/deploy_mujoco_rl_keyboard_debug.py \
   --debug-steps 300
 ```
 
-键盘控制启动时默认禁用，先按 `F` 使能。方向键采用按住式控制，松开后对应速度轴立即归零：
+键盘控制启动时默认禁用，先按 `F` 使能。使能成功后程序会独占已监听的键盘，控制按键不会再触发 MuJoCo Viewer 的默认快捷键；按 `I` 会禁用控制、清零命令并释放键盘。键盘被独占时，终端也收不到该键盘的 `Ctrl+C`，需要先按 `I` 再终止程序。方向键采用按住式控制，松开后对应速度轴立即归零：
 
 | 按键 | 作用 |
 | --- | --- |

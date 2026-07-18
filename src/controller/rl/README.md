@@ -154,7 +154,7 @@ RL 本地部署主入口。
 | `--device` | 指定推理设备，如 `cpu` 或 `cuda:0`。ONNX 使用 CUDA 时需安装匹配的 `onnxruntime-gpu`。 |
 | `--headless` | 不打开 MuJoCo viewer。 |
 | `--debug-steps N` | 打印前 `N` 次 policy 推理的状态、动作和力矩信息，默认不打印。 |
-| `--keyboard-device` | 手动指定 Linux 键盘 event 设备；默认自动识别。 |
+| `--keyboard-device` | 手动限制为一个 Linux 键盘 event 设备；默认自动识别并监听所有合格键盘。 |
 | `--no-keyboard` | 禁用 evdev 输入，改用 YAML 或 `--command` 固定命令。 |
 
 ## core 模块
@@ -247,9 +247,11 @@ Linux 键盘设备读取层。
 负责内容：
 
 - 优先查找 `/dev/input/by-path/*-event-kbd`。
-- 按配置中的 `KEY_*` 能力筛选正确键盘，也支持 `--keyboard-device` 手动指定。
+- 按配置中的 `KEY_*` 能力筛选键盘，自动模式同时监听所有合格设备。
+- 支持 `--keyboard-device` 手动限制为一个设备。
 - 后台线程读取 `EV_KEY` 的按下、松开和长按事件。
 - 线程安全地保存当前按键集合，并单独记录功能键的按下边沿。
+- `F` 使能时通过 `EVIOCGRAB` 独占键盘，避免控制键同时触发 MuJoCo Viewer 快捷键；`I` 禁用时释放。
 - 设备断开或读取异常时清空按键，供主循环禁用控制并清零命令。
 - 程序退出时停止线程并关闭输入设备。
 
@@ -336,7 +338,7 @@ target_joint_pos
 --debug-steps 200
 ```
 
-脚本默认自动识别当前主机键盘，适合观察按键命令、策略输入和动作是否连续变化。必要时可传入 `--keyboard-device /dev/input/by-path/...-event-kbd`。
+脚本默认自动识别并监听当前主机上的所有合格键盘，适合观察按键命令、策略输入和动作是否连续变化。必要时可传入 `--keyboard-device /dev/input/by-path/...-event-kbd` 限制为单个设备。
 
 ### `test/test_keyboard_controller.py`
 
@@ -429,12 +431,14 @@ python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --duration 30
 ```
 
-默认自动查找本地 Linux 键盘。手动指定键盘设备：
+默认自动查找并监听所有合格的本地 Linux 键盘。限制为单个键盘设备：
 
 ```bash
 python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py \
   --keyboard-device /dev/input/by-path/<设备名>-event-kbd
 ```
+
+控制默认禁用。按 `F` 后程序独占已监听的键盘，MuJoCo Viewer 不再收到控制按键；按 `I` 后清零命令并释放键盘。独占期间需要先按 `I`，再在终端使用 `Ctrl+C`。
 
 打印前 100 次 policy 推理的调试信息：
 

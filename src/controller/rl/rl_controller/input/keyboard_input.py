@@ -41,17 +41,34 @@ class KeyboardInput:
             raise ValueError('tracked_keys must not be empty')
 
         self._code_to_key = self._resolve_key_codes(self._tracked_keys)
-        selected_path = self._select_device_path(device_path)
-        device = evdev.InputDevice(selected_path)
+        selected_paths = self._select_device_paths(device_path)
+        devices: list[Any] = []
         try:
-            self._validate_device_capabilities(device)
+            for selected_path in selected_paths:
+                device = evdev.InputDevice(selected_path)
+                try:
+                    self._validate_device_capabilities(device)
+                except Exception:
+                    device.close()
+                    raise
+                devices.append(device)
         except Exception:
-            device.close()
+            for opened_device in devices:
+                opened_device.close()
             raise
-        self._device = device
+        self._devices = devices
+        self._devices_lock = threading.Lock()
+        self._exclusive = False
 
-        self.device_path = str(self._device.path)
-        self.device_name = str(self._device.name or 'unknown keyboard')
+        self.device_paths = tuple(str(device.path) for device in self._devices)
+        self.device_names = tuple(
+            str(device.name or 'unknown keyboard')
+            for device in self._devices
+        )
+        self._pressed_keys_by_fd: dict[int, set[str]] = {
+            int(device.fd): set()
+            for device in self._devices
+        }
         self._pressed_keys: set[str] = set()
         self._state_lock = threading.Lock()
         self._key_events: queue.Queue[str] = queue.Queue()
@@ -82,7 +99,7 @@ class KeyboardInput:
             raise ValueError('Configured keyboard bindings resolve to duplicate Linux key codes')
         return code_to_key
 
-    def _select_device_path(self, requested_path: str | Path | None) -> str:
+    def _select_device_paths(self, requested_path: str | Path | None) -> list[str]:
         if requested_path is not None:
             path = str(Path(requested_path).expanduser())
             device = self._evdev.InputDevice(path)
@@ -90,7 +107,7 @@ class KeyboardInput:
                 self._validate_device_capabilities(device)
             finally:
                 device.close()
-            return path
+            return [path]
 
         candidates: list[str] = []
         by_path = Path('/dev/input/by-path')
@@ -104,6 +121,7 @@ class KeyboardInput:
 
         seen_devices: set[str] = set()
         permission_errors: list[str] = []
+        selected_paths: list[str] = []
         for path in candidates:
             real_path = str(Path(path).resolve())
             if real_path in seen_devices:
@@ -120,7 +138,10 @@ class KeyboardInput:
                 continue
             except (FileNotFoundError, OSError, RuntimeError):
                 continue
-            return path
+            selected_paths.append(path)
+
+        if selected_paths:
+            return selected_paths
 
         if permission_errors:
             raise PermissionError(
@@ -150,43 +171,84 @@ class KeyboardInput:
     def _read_loop(self) -> None:
         try:
             while self._running.is_set():
+                with self._devices_lock:
+                    devices_by_fd = {
+                        int(device.fd): device
+                        for device in self._devices
+                    }
+                if not devices_by_fd:
+                    raise RuntimeError('All Linux keyboard devices have disconnected')
                 ready, _, _ = select.select(
-                    [self._device.fd],
+                    list(devices_by_fd),
                     [],
                     [],
                     self._read_timeout,
                 )
                 if not ready:
                     continue
-                try:
-                    events = self._device.read()
-                except BlockingIOError:
-                    continue
-                for event in events:
-                    if event.type != self._evdev.ecodes.EV_KEY:
+                for device_fd in ready:
+                    device = devices_by_fd[int(device_fd)]
+                    try:
+                        events = device.read()
+                    except BlockingIOError:
                         continue
-                    key_name = self._code_to_key.get(int(event.code))
-                    if key_name is None:
+                    except OSError as exc:
+                        if not self._drop_device(int(device_fd)):
+                            raise RuntimeError(
+                                f'All Linux keyboard devices have disconnected: {exc}'
+                            ) from exc
                         continue
-                    self._handle_key_event(key_name, int(event.value))
+                    for event in events:
+                        if event.type != self._evdev.ecodes.EV_KEY:
+                            continue
+                        key_name = self._code_to_key.get(int(event.code))
+                        if key_name is None:
+                            continue
+                        self._handle_key_event(
+                            int(device_fd),
+                            key_name,
+                            int(event.value),
+                        )
         except Exception as exc:  # pragma: no cover - requires a device disconnect.
             if self._running.is_set():
                 with self._state_lock:
                     self._last_error = exc
         finally:
             with self._state_lock:
+                for pressed_keys in self._pressed_keys_by_fd.values():
+                    pressed_keys.clear()
                 self._pressed_keys.clear()
                 self._last_event_time = time.monotonic()
             self._running.clear()
 
-    def _handle_key_event(self, key_name: str, value: int) -> None:
+    def _drop_device(self, device_fd: int) -> bool:
+        with self._devices_lock:
+            remaining_devices: list[Any] = []
+            for device in self._devices:
+                if int(device.fd) == device_fd:
+                    device.close()
+                else:
+                    remaining_devices.append(device)
+            self._devices = remaining_devices
+            if not self._devices:
+                self._exclusive = False
+
         with self._state_lock:
+            self._pressed_keys_by_fd.pop(device_fd, None)
+            self._pressed_keys = set().union(*self._pressed_keys_by_fd.values())
+            self._last_event_time = time.monotonic()
+        return bool(remaining_devices)
+
+    def _handle_key_event(self, device_fd: int, key_name: str, value: int) -> None:
+        with self._state_lock:
+            device_pressed_keys = self._pressed_keys_by_fd.setdefault(device_fd, set())
             if value in (1, 2):
-                self._pressed_keys.add(key_name)
+                device_pressed_keys.add(key_name)
             elif value == 0:
-                self._pressed_keys.discard(key_name)
+                device_pressed_keys.discard(key_name)
             else:
                 return
+            self._pressed_keys = set().union(*self._pressed_keys_by_fd.values())
             self._last_event_time = time.monotonic()
 
         if value == 1:
@@ -212,14 +274,61 @@ class KeyboardInput:
         with self._state_lock:
             return self._last_error
 
+    @property
+    def exclusive(self) -> bool:
+        with self._devices_lock:
+            return self._exclusive
+
+    def set_exclusive(self, enabled: bool) -> None:
+        """Prevent other applications from receiving keyboard events while enabled."""
+        enabled = bool(enabled)
+        with self._devices_lock:
+            if self._exclusive == enabled:
+                return
+            if not enabled:
+                for device in self._devices:
+                    try:
+                        device.ungrab()
+                    except OSError:
+                        pass
+                self._exclusive = False
+                return
+
+            if not self._devices:
+                raise RuntimeError('No connected keyboard device is available')
+            grabbed_devices: list[Any] = []
+            try:
+                for device in self._devices:
+                    device.grab()
+                    grabbed_devices.append(device)
+            except OSError as exc:
+                failed_device_path = str(device.path)
+                for grabbed_device in reversed(grabbed_devices):
+                    try:
+                        grabbed_device.ungrab()
+                    except OSError:
+                        pass
+                raise RuntimeError(
+                    f'Could not acquire exclusive access to {failed_device_path}: {exc}'
+                ) from exc
+            self._exclusive = True
+
     def close(self) -> None:
         if not hasattr(self, '_running'):
             return
         self._running.clear()
         if hasattr(self, '_thread') and self._thread.is_alive():
             self._thread.join(timeout=self._read_timeout + 0.5)
-        if getattr(self, '_device', None) is not None:
-            self._device.close()
-            self._device = None
+        with self._devices_lock:
+            if self._exclusive:
+                for device in self._devices:
+                    try:
+                        device.ungrab()
+                    except OSError:
+                        pass
+                self._exclusive = False
+            for device in self._devices:
+                device.close()
+            self._devices = []
         if hasattr(self, '_thread') and self._thread.is_alive():
             self._thread.join(timeout=0.5)

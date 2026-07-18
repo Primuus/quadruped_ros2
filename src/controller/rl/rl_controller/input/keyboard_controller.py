@@ -38,6 +38,7 @@ class KeyboardKeyEffect:
     reset_sim: bool = False
     reset_policy_state: bool = False
     print_status: bool = False
+    exclusive_input: bool | None = None
     log_message: str | None = None
 
 
@@ -113,11 +114,15 @@ class KeyboardCommandController:
             self.current_command.fill(0.0)
             return KeyboardKeyEffect(
                 reset_policy_state=not was_enabled,
+                exclusive_input=True,
                 log_message='keyboard control enabled',
             )
         if action == 'disable':
             self.disable()
-            return KeyboardKeyEffect(log_message='keyboard control disabled; command cleared')
+            return KeyboardKeyEffect(
+                exclusive_input=False,
+                log_message='keyboard control disabled; command cleared',
+            )
         if action == 'stop':
             self._stop_until_directions_released = True
             self.current_command.fill(0.0)
