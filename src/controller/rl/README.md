@@ -1,10 +1,10 @@
 # RL 本地部署子工程说明
 
-`src/controller/rl` 是 `quadruped` 中的 RL 本地部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`，主要作用是在本地 MuJoCo 中加载 `quadruped_train` 从同一个部署模型直接导出的 TorchScript 或 ONNX 策略，验证四足机器人策略的运动效果。
+`src/controller/rl` 是 `quadruped` 中的 RL 部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`。当前可运行入口负责在本地 MuJoCo 中加载 `quadruped_train` 从同一个部署模型直接导出的 TorchScript 或 ONNX 策略；同时已经建立未来自研四足实机部署的公共接口、配置格式和厂商 SDK 集成基础。
 
-当前已经接入的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、MuJoCo 资源和策略文件，而不是复制部署主循环。当前 RL 部署不包含训练代码，也不包含实机 sim-to-real 输出链路。
+当前已经接入 MuJoCo 的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、物理资源和策略文件，而不是复制部署主循环。本仓库不包含训练代码。实机侧目前只完成方案阶段 0–3，还没有实机 runner、电机后端、IMU 后端或可执行入口，不能向真实电机发命令。
 
-## 总体数据流
+## MuJoCo 数据流
 
 ```text
 MuJoCo state
@@ -21,6 +21,23 @@ MuJoCo state
 
 训练侧 critic 使用的 privileged obs 不进入这里的策略输入。部署侧只负责按 YAML 配置构造历史观测并调用所选推理后端；更换 TorchScript / ONNX 后端不会改变观测、动作裁剪、PD、MuJoCo 或键盘输入逻辑。
 
+## 实机链路当前状态
+
+未来实机链路采用 Python、ONNX Runtime、YESENSE YIS130 IMU 和工程内固定版本的 Unitree Actuator SDK。目标数据流为：
+
+```text
+Linux evdev 键盘命令
+  + 电机 q/dq 反馈
+  + 机身 IMU
+  -> 45 维单帧观测
+  -> 6 帧历史，形成 270 维输入
+  -> ONNX policy，输出 12 维 action
+  -> 目标关节角与安全检查
+  -> Unitree GO-M8010-6 电机后端
+```
+
+当前只提供不接设备即可导入的公共状态类型、硬件协议、严格配置解析器、Mock 配置、真实机器人待填写模板，以及官方 Actuator SDK 的固定源码快照和无硬件构建脚本。Mock runner、真实硬件后端和实机入口属于后续阶段。
+
 ## 目录结构
 
 ```text
@@ -31,17 +48,29 @@ src/controller/rl/
   setup.cfg
   resource/rl_controller
   config/go2.yaml
+  config/real/
+    mock.yaml
+    custom_quadruped.example.yaml
   models/
   resources/robots/go2/
+  third_party/
+    unitree_actuator_sdk/
+    build_unitree_actuator_sdk.sh
   rl_controller/
     deploy_mujoco_rl.py
     core/
     input/
+    real/
+      config.py
+      types.py
+      hardware/base.py
   test/
     compare_policy_backends.py
     deploy_mujoco_rl_debug.py
     deploy_mujoco_rl_keyboard_debug.py
     test_keyboard_controller.py
+    test_real_config.py
+    test_real_interfaces.py
 ```
 
 ## 顶层文件
@@ -84,6 +113,14 @@ src/controller/rl/
 - 训练侧改了 PD、默认角、action scale、clip actions 或观测缩放时，这里要同步。
 - 部署侧 policy 外部输入必须和训练导出的模型输入维度一致。
 - privileged obs 只用于配置对齐和检查，不会输入部署 policy。
+
+### `config/real/mock.yaml`
+
+完整且可解析的实机链路离线配置。它使用 Mock 策略、Mock 电机和 Mock IMU，不加载模型、不导入 Unitree SDK、也不打开串口。配置中的关节限位、增益和安全阈值只用于后续故障测试，不能作为真实机器人的默认值。
+
+### `config/real/custom_quadruped.example.yaml`
+
+未来自研四足的真实配置模板。已知的接口契约保留为 12 维动作、45 维单帧观测、6 帧历史和 270 维输入；机械零位、方向、Motor ID、总线设备、关节限位、增益、IMU 安装旋转、安全阈值和 ONNX 路径等未知值保持 `null`。模板本身应当解析失败，目的是防止未标定参数被误用于实机。
 
 ## 策略文件
 
@@ -289,6 +326,49 @@ Linux 键盘设备读取层。
 
 input 模块导出文件，供 `deploy_mujoco_rl.py` 导入 `KeyboardInput` 和 `KeyboardCommandController`。
 
+## real 模块
+
+`rl_controller/real` 是未来实机运行器依赖的硬件无关层。阶段 0–3 只定义数据契约和配置，不创建串口、不加载策略，也不发送电机命令。
+
+### `rl_controller/real/types.py`
+
+定义 `JointState`、`ImuState`、`JointCommand` 和 `RealRobotState`。所有数值数组统一复制为只读 `float32` 快照，错误码使用 `int64`，时间戳使用非负的单调时钟秒；构造时会检查每组关节数组的维度一致性。
+
+### `rl_controller/real/hardware/base.py`
+
+定义 `MotorBackend` 和 `ImuBackend` 协议，以及后端不可用、通信失败等公共异常。上层运行器只依赖这些协议，不接触 Unitree、YIS130 或 MuJoCo 专有类型。
+
+### `rl_controller/real/config.py`
+
+读取并严格校验 `config/real/*.yaml`，主要检查：
+
+- schema 版本、字段缺失和字段拼写；
+- 45×6=270 观测契约及 12 维动作；
+- 策略关节顺序与电机映射顺序；
+- 总线名称和同一总线 Motor ID 的唯一性；
+- 方向、减速比、零位、关节限位、目标角步长和 PD 增益；
+- 默认角是否位于对应输出轴限位内；
+- IMU 四元数顺序、安装旋转和角速度单位；
+- 策略、电机、日志频率以及状态和推理超时；
+- 真实电机后端与 Mock 策略等危险组合；
+- 真实设备路径、ONNX 文件和待填写字段。
+
+该模块只依赖 NumPy 和 PyYAML，可以在未构建 Unitree SDK、未安装 MuJoCo、未连接硬件时导入。
+
+## third_party 目录
+
+### `third_party/unitree_actuator_sdk/`
+
+Unitree 官方 `unitree_actuator_sdk` 的固定源码快照，版本和上游提交号记录在 `third_party/unitree_actuator_sdk.version`。第三方源码保持原样，关节映射、机械零位、方向、输出轴换算和安全检查将在自己的硬件后端中实现。
+
+无硬件构建当前主机对应的 Python 绑定和 GO-M8010-6 官方示例：
+
+```bash
+bash src/controller/rl/third_party/build_unitree_actuator_sdk.sh
+```
+
+脚本只编译并导入模块，不打开 RS485 串口，也不会发送电机命令。当前 Python ABI 的生成模块和 `build/` 目录均被 Git 忽略。
+
 ## test 目录
 
 ### `test/deploy_mujoco_rl_debug.py`
@@ -343,6 +423,14 @@ target_joint_pos
 ### `test/test_keyboard_controller.py`
 
 不访问实际键盘和 MuJoCo 的命令映射单元测试，覆盖初始禁用、使能、组合键、反向抵消、三档速度、Space 停止锁存、禁用清零和仿真重置事件。
+
+### `test/test_real_interfaces.py`
+
+不访问设备的实机公共接口测试，覆盖状态数组的类型、维度、只读快照、时间戳和硬件协议结构。
+
+### `test/test_real_config.py`
+
+实机配置解析测试，覆盖完整 Mock 配置、真实模板待填写错误、schema 和观测维度、重复 Motor ID、非法方向、未知总线、越界默认角、危险后端组合，以及配置模块不导入 MuJoCo 或 Unitree SDK。
 
 ### `test/compare_policy_backends.py`
 
@@ -477,7 +565,7 @@ python3 src/controller/rl/test/compare_policy_backends.py \
   --observations observations.npy
 ```
 
-完成离线输出比较后，应使用相同 YAML、初始状态和速度命令分别运行 `.pt` 与 `.onnx`，确认 MuJoCo 闭环行为一致。这个阶段通过后再进入 C++ + ONNX Runtime + SDK2 实机部署。
+完成离线输出比较后，应使用相同 YAML、初始状态和速度命令分别运行 `.pt` 与 `.onnx`，确认 MuJoCo 闭环行为一致。未来实机链路使用 Python + ONNX Runtime，并通过工程内 Unitree Actuator SDK 直接控制 GO-M8010-6，不使用 Go2 SDK2。
 
 ## 和训练侧的同步关系
 
@@ -518,7 +606,9 @@ python3 -m py_compile src/controller/rl/rl_controller/core/pd.py
 python3 -m py_compile src/controller/rl/rl_controller/core/policy.py
 python3 -m py_compile src/controller/rl/rl_controller/input/keyboard_input.py
 python3 -m py_compile src/controller/rl/rl_controller/input/keyboard_controller.py
-python3 -m unittest src/controller/rl/test/test_keyboard_controller.py -v
+python3 -m py_compile src/controller/rl/rl_controller/real/config.py
+PYTHONPATH=src/controller/rl python3 -m unittest discover \
+  -s src/controller/rl/test -p 'test_*.py' -v
 ```
 
 配置读取检查：
@@ -536,3 +626,21 @@ PY
 ```text
 go2 270 238 238
 ```
+
+实机 Mock 配置读取检查：
+
+```bash
+PYTHONPATH=src/controller/rl python3 - <<'PY'
+from rl_controller.real import RealDeploymentConfig
+cfg = RealDeploymentConfig.from_yaml('src/controller/rl/config/real/mock.yaml')
+print(cfg.robot.name, cfg.robot.num_obs, cfg.policy.backend, cfg.motors.backend)
+PY
+```
+
+期望输出：
+
+```text
+mock_quadruped 270 mock mock
+```
+
+`custom_quadruped.example.yaml` 保留了未标定的 `null`，因此当前读取失败属于预期行为。

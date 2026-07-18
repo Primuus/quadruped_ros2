@@ -3,7 +3,7 @@
 `quadruped` 是本地控制、仿真和策略加载工作区。当前包含两套互相独立的框架：
 
 - 传统 PD 控制：ROS2 启动，负责 Gazebo 仿真和实机控制。
-- RL 本地部署：直接 Python 运行，负责 MuJoCo 中加载 TorchScript 或 ONNX 策略。
+- RL 部署：直接 Python 运行，当前负责 MuJoCo 策略回放，并包含未来自研四足实机链路的公共接口和配置基础。
 
 训练侧在 `quadruped_train` 工作区完成，不和本仓库混用。本仓库不训练策略，只负责传统控制链路和本地 RL 策略回放。当前接入的机器人实例是 Go2，但 RL 部署接口按四足机器人通用配置组织，新增机器人时应新增 YAML、MuJoCo 资源和策略文件。
 
@@ -12,14 +12,14 @@
 | 框架 | 入口 | 运行方式 | 作用 |
 | --- | --- | --- | --- |
 | 传统 PD | `ros2 launch quadruped ...` | ROS2 | Gazebo 仿真 / 实机控制 |
-| RL 部署 | `python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py` | 直接 Python | MuJoCo + TorchScript / ONNX Runtime 策略回放 |
+| RL 部署 | `python3 src/controller/rl/rl_controller/deploy_mujoco_rl.py` | 直接 Python | MuJoCo 策略回放；实机链路基础开发 |
 
 两套框架不共享启动入口：传统 PD 不加载 RL 策略，RL 部署也不接入 `quadruped` 的 ROS2 launch。
 
 ## 目录说明
 
 - `src/controller/quadruped`：传统 PD 控制节点、FSM、launch、控制参数和消息接口。
-- `src/controller/rl`：RL 本地部署包，包含 MuJoCo runner、观测构造、双推理后端、PD 力矩映射和 Linux 本地键盘输入。
+- `src/controller/rl`：RL 部署包，包含 MuJoCo runner、观测构造、双推理后端、Linux 本地键盘输入，以及实机配置、硬件协议和固定版本的 Unitree Actuator SDK。
 - `src/input/serial_controller`：QLP 遥控器串口输入，服务于传统 PD ROS2 链路。
 - `src/input/kbd`：键盘备用输入，服务于传统 PD ROS2 链路。
 - `src/robot_gazebo`：Gazebo Classic 仿真资源。
@@ -135,6 +135,17 @@ quadruped_train 训练
 ```
 
 训练侧 critic 的 238 维 privileged obs 只用于训练，不进入本地部署策略输入。
+
+### 实机链路开发状态
+
+实机部署和 MuJoCo 使用独立入口，目标是让未来自研四足通过 Python、ONNX Runtime、YESENSE YIS130 IMU 和 Unitree Actuator SDK 控制 12 个 GO-M8010-6 电机。当前只完成以下基础：
+
+- 通用 `JointState`、`ImuState`、`JointCommand` 和硬件后端协议；
+- `config/real/mock.yaml` 与严格配置解析；
+- `config/real/custom_quadruped.example.yaml` 待标定模板；
+- 工程内固定版本的官方 Unitree Actuator SDK 和无硬件构建脚本。
+
+当前没有实机 runner、Mock 后端、真实电机/IMU 后端，也不会向设备发送命令。后续阶段和验收顺序见项目根目录的 `方案.md`。
 
 ### 依赖
 

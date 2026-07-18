@@ -1,0 +1,139 @@
+# 未来自研四足的真实部署配置模板。
+# null 表示必须通过训练契约、机械标定、硬件手册或安全测试确定，解析器会拒绝
+# 使用未填写的模板。不要把 mock.yaml 或 Go2 的数值直接复制到实机配置。
+
+schema_version: 1
+
+robot:
+  name: custom_quadruped
+  # 如自研 URDF 使用不同名称，必须同时修改这里和 motors.joints 的顺序。
+  joint_names:
+    - FL_hip_joint
+    - FL_thigh_joint
+    - FL_calf_joint
+    - FR_hip_joint
+    - FR_thigh_joint
+    - FR_calf_joint
+    - RL_hip_joint
+    - RL_thigh_joint
+    - RL_calf_joint
+    - RR_hip_joint
+    - RR_thigh_joint
+    - RR_calf_joint
+  # 由自研机器人训练配置和站姿确定 [rad]。
+  default_angles:
+    - null
+    - null
+    - null
+    - null
+    - null
+    - null
+    - null
+    - null
+    - null
+    - null
+    - null
+    - null
+  # 必须与训练时 control.action_scale 完全一致。
+  action_scale: null
+  num_one_step_obs: 45
+  history_length: 6
+  num_obs: 270
+
+policy:
+  backend: onnx
+  # 相对路径以 src/controller/rl 为基准，也可以填写绝对路径。
+  model_path: null
+  num_observations: 270
+  num_actions: 12
+  frequency_hz: 50.0
+  # 必须从该 ONNX 对应的训练配置中填写。
+  clip_observations: null
+  clip_actions: null
+  observation_scales:
+    angular_velocity: null
+    dof_position: null
+    dof_velocity: null
+    command:
+      - null
+      - null
+      - null
+
+motors:
+  backend: unitree_m8010
+  # 根据最终 USB-RS485 拓扑增删总线；设备使用稳定的 udev 符号链接。
+  buses:
+    - name: bus_0
+      device: null
+      baud_rate: null
+  # motor_id 在同一总线上必须唯一。所有角度和增益均为输出轴侧定义。
+  joints:
+    - {joint_name: FL_hip_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: FL_thigh_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: FL_calf_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: FR_hip_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: FR_thigh_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: FR_calf_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: RL_hip_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: RL_thigh_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: RL_calf_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: RR_hip_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: RR_thigh_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+    - {joint_name: RR_calf_joint, bus: bus_0, motor_id: null, direction: null, zero_offset_rad: null, gear_ratio: null, position_limits_rad: [null, null], max_target_step_rad: null, kp: null, kd: null}
+  io_frequency_hz: null
+  state_timeout_s: null
+
+imu:
+  backend: yesense_yis130
+  # 使用稳定的 udev 符号链接，不依赖 ttyUSB 编号。
+  device: null
+  baud_rate: null
+  # 根据 YIS130 实际输出协议填写 wxyz 或 xyzw。
+  quaternion_order: null
+  # 通过安装方向标定得到 IMU 坐标系到机身坐标系旋转。
+  mounting_quaternion_wxyz: null
+  # 根据所选协议输出填写 rad/s 或 deg/s。
+  angular_velocity_unit: null
+  state_timeout_s: null
+
+safety:
+  # 以下阈值必须通过硬件能力、台架试验和逐级放权确定。
+  max_state_age_s: null
+  max_motor_temperature_c: null
+  max_abs_roll_pitch_rad: null
+  max_policy_inference_time_s: null
+  fault_action: safe_stop
+
+runtime:
+  # 站姿过渡时间必须在吊架和低增益条件下验证。
+  move_to_default_duration_s: null
+  history_warmup_frames: 6
+  log_frequency_hz: 10.0
+  shutdown_timeout_s: 1.0
+
+keyboard:
+  bindings:
+    forward: KEY_W
+    backward: KEY_S
+    left: KEY_A
+    right: KEY_D
+    turn_left: KEY_Q
+    turn_right: KEY_E
+    stop: KEY_SPACE
+    enable: KEY_F
+    disable: KEY_I
+    speed_low: KEY_1
+    speed_medium: KEY_2
+    speed_high: KEY_3
+    reset_sim: KEY_R
+    print_status: KEY_P
+  # 由训练命令范围确定，不可沿用 Mock 数值。
+  command_limits:
+    - null
+    - null
+    - null
+  speed_levels:
+    - 0.25
+    - 0.5
+    - 1.0
+  default_speed_level: 1
