@@ -138,15 +138,16 @@ quadruped_train 训练
 
 ### 实机链路开发状态
 
-实机部署和 MuJoCo 使用独立入口，目标是让未来自研四足通过 Python、ONNX Runtime、YESENSE YIS130 IMU 和 Unitree Actuator SDK 控制 12 个 GO-M8010-6 电机。当前只完成以下基础：
+实机部署和 MuJoCo 使用独立入口，目标是让未来自研四足通过 Python、ONNX Runtime、YESENSE YIS130 IMU 和 Unitree Actuator SDK 控制 12 个 GO-M8010-6 电机。当前已完成方案阶段 0–5：
 
 - 通用 `JointState`、`ImuState`、`JointCommand` 和硬件后端协议；
 - `config/real/mock.yaml` 与严格配置解析；
 - `config/real/custom_quadruped.example.yaml` 待标定模板；
 - 工程内固定版本的官方 Unitree Actuator SDK 和无硬件构建脚本。
 - 不依赖设备和模型文件的 Mock 电机、Mock IMU、Mock 策略及故障注入。
+- GO-M8010-6 真实电机后端，支持多条 USB-RS485 总线、12 关节映射、转子侧换算、完整反馈聚合以及总线状态诊断。
 
-当前没有实机 runner 和真实电机/IMU 后端，也不会向设备发送命令。Mock 组件当前通过单元测试手工串联，完整运行循环将在后续阶段实现；阶段和验收顺序见项目根目录的 `方案.md`。
+当前没有实机 runner 和 YIS130 后端，默认入口也不会向设备发送命令。GO-M8010-6 后端只能由未来实机入口显式实例化，并要求真实配置和已构建的官方 SDK；完整运行循环将在后续阶段实现。阶段和验收顺序见项目根目录的 `方案.md`。
 
 ### 依赖
 

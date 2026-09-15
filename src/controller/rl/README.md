@@ -2,7 +2,7 @@
 
 `src/controller/rl` 是 `quadruped` 中的 RL 部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`。当前可运行入口负责在本地 MuJoCo 中加载 `quadruped_train` 从同一个部署模型直接导出的 TorchScript 或 ONNX 策略；同时已经建立未来自研四足实机部署的公共接口、配置格式和厂商 SDK 集成基础。
 
-当前已经接入 MuJoCo 的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、物理资源和策略文件，而不是复制部署主循环。本仓库不包含训练代码。实机侧目前完成方案阶段 0–4，具有 Mock 电机、Mock IMU 和 Mock 策略，但还没有实机 runner、真实硬件后端或可执行入口，不能向真实电机发命令。
+当前已经接入 MuJoCo 的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、物理资源和策略文件，而不是复制部署主循环。本仓库不包含训练代码。实机侧目前完成方案阶段 0–5，具有 Mock 组件和 GO-M8010-6 真实电机后端，但还没有实机 runner、YIS130 后端或可执行入口，默认运行方式不能向真实电机发命令。
 
 ## MuJoCo 数据流
 
@@ -36,7 +36,7 @@ Linux evdev 键盘命令
   -> Unitree GO-M8010-6 电机后端
 ```
 
-当前提供不接设备即可导入的公共状态类型、硬件协议、严格配置解析器、Mock 配置、三类 Mock 组件及故障注入，以及官方 Actuator SDK 的固定源码快照和无硬件构建脚本。完整 Mock runner、真实硬件后端和实机入口属于后续阶段。
+当前提供不接设备即可导入的公共状态类型、硬件协议、严格配置解析器、Mock 配置、三类 Mock 组件及故障注入、官方 Actuator SDK 的固定源码快照和 GO-M8010-6 后端。该后端使用延迟导入，只有未来实机入口选择 `unitree_m8010` 时才加载 SDK 和打开串口。完整 Mock runner、YIS130 后端和实机入口属于后续阶段。
 
 ## 目录结构
 
@@ -67,6 +67,7 @@ src/controller/rl/
         base.py
         mock_motor.py
         mock_imu.py
+        unitree_m8010.py
       policy/
         mock_policy.py
   test/
@@ -334,7 +335,7 @@ input 模块导出文件，供 `deploy_mujoco_rl.py` 导入 `KeyboardInput` 和 
 
 ## real 模块
 
-`rl_controller/real` 是未来实机运行器依赖的硬件无关层。阶段 0–4 已定义数据契约、配置和离线 Mock 组件；这些组件不创建串口、不加载模型，也不发送真实电机命令。
+`rl_controller/real` 是未来实机运行器依赖的硬件无关层。阶段 0–5 已定义数据契约、配置、离线 Mock 组件和 GO-M8010-6 真实电机后端；只有显式创建并打开真实后端时才会访问串口。
 
 ### `rl_controller/real/types.py`
 
@@ -376,6 +377,24 @@ input 模块导出文件，供 `deploy_mujoco_rl.py` 导入 `KeyboardInput` 和 
 ### `rl_controller/real/hardware/mock_imu.py`
 
 实现 `ImuBackend` 协议，输出机身坐标系下的 `[w, x, y, z]` 四元数和 `rad/s` 角速度。可设置正常状态，也可注入过期时间戳、NaN、无效状态，以及由 roll/pitch/yaw 构造的倾倒姿态。
+
+### `rl_controller/real/hardware/unitree_m8010.py`
+
+封装官方 Unitree Actuator SDK 的 GO-M8010-6 后端。它按配置管理一条或多条 USB-RS485 总线，同一 Motor ID 可以在不同总线上重复，但每个 `(bus, motor_id)` 地址必须唯一。每次 `cycle()` 必须收到全部关节的有效响应才会发布一个 `JointState`；任一串口异常、错误 ID、无效帧、非有限反馈或跨总线完成过慢都会使整轮失败。
+
+配置中的 `zero_offset_rad` 定义为电机输出轴零角对应的机器人关节角，因而统一关系为：
+
+```text
+joint_position = direction * motor_output_position + zero_offset_rad
+motor_output_position = direction * (joint_position - zero_offset_rad)
+
+rotor_position = motor_output_position * gear_ratio
+rotor_velocity = motor_output_velocity * gear_ratio
+rotor_kp / rotor_kd = output_kp / output_kd ÷ gear_ratio²
+rotor_torque = output_torque ÷ gear_ratio
+```
+
+反馈执行逆变换并回到策略关节顺序。后端还提供最近完整周期的 `last_bus_timestamps`、`last_bus_time_skew_s`、`last_state_age_s` 和 `last_bus_errors`，供后续状态聚合与安全层使用。`safe_stop()` 会尝试向所有电机发送 BRAKE，即使中途某个电机通信失败也会继续处理其余地址，并锁存停止状态。
 
 ### `rl_controller/real/policy/mock_policy.py`
 
@@ -463,6 +482,10 @@ Mock 组件测试，覆盖电机速度限幅、生命周期、`safe_stop`、IMU 
 ### `test/test_real_config.py`
 
 实机配置解析测试，覆盖完整 Mock 配置、真实模板待填写错误、schema 和观测维度、重复 Motor ID、非法方向、未知总线、越界默认角、危险后端组合，以及配置模块不导入 MuJoCo 或 Unitree SDK。
+
+### `test/test_unitree_m8010_backend.py`
+
+完全使用伪 SDK 验证 GO-M8010-6 后端，不打开实际串口。覆盖关节侧与转子侧位置、速度、增益和力矩换算，多总线及重复 ID、完整反馈时间戳、状态年龄、无响应/坏帧/错误 ID/NaN/串口异常、跨总线超时、减速比核对以及全电机 BRAKE。
 
 ### `test/compare_policy_backends.py`
 

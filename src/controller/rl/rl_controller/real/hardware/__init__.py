@@ -7,6 +7,7 @@ from .base import (
 )
 from .mock_imu import MockImuBackend
 from .mock_motor import MockMotorBackend
+from .unitree_m8010 import UnitreeM8010Backend
 
 __all__ = [
     'BackendCommunicationError',
@@ -16,4 +17,5 @@ __all__ = [
     'MockImuBackend',
     'MockMotorBackend',
     'MotorBackend',
+    'UnitreeM8010Backend',
 ]
