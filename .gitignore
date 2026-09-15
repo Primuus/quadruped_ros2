@@ -3,7 +3,6 @@ build/
 install/
 log/
 # colcon_ws/
-src/policy_model/
 
 # Compiled binaries
 *.o
