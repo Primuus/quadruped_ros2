@@ -192,6 +192,7 @@ class RealDeploymentConfigTest(unittest.TestCase):
             'import sys\n'
             'from rl_controller.real.config import RealDeploymentConfig\n'
             "assert 'mujoco' not in sys.modules\n"
+            "assert 'serial' not in sys.modules\n"
             "assert 'unitree_actuator_sdk' not in sys.modules\n"
             'assert RealDeploymentConfig is not None\n'
         )

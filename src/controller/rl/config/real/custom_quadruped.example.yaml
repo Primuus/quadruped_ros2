@@ -88,12 +88,12 @@ imu:
   # 使用稳定的 udev 符号链接，不依赖 ttyUSB 编号。
   device: null
   baud_rate: null
-  # 根据 YIS130 实际输出协议填写 wxyz 或 xyzw。
-  quaternion_order: null
+  # Yesense 私有 UART 协议依次输出 q0、q1、q2、q3，q0 为实部。
+  quaternion_order: wxyz
   # 通过安装方向标定得到 IMU 坐标系到机身坐标系旋转。
   mounting_quaternion_wxyz: null
-  # 根据所选协议输出填写 rad/s 或 deg/s。
-  angular_velocity_unit: null
+  # Yesense 私有 UART 协议的角速度原始单位为 deg/s，后端统一转成 rad/s。
+  angular_velocity_unit: deg/s
   state_timeout_s: null
 
 safety:

@@ -138,7 +138,7 @@ quadruped_train 训练
 
 ### 实机链路开发状态
 
-实机部署和 MuJoCo 使用独立入口，目标是让未来自研四足通过 Python、ONNX Runtime、YESENSE YIS130 IMU 和 Unitree Actuator SDK 控制 12 个 GO-M8010-6 电机。当前已完成方案阶段 0–5：
+实机部署和 MuJoCo 使用独立入口，目标是让未来自研四足通过 Python、ONNX Runtime、YESENSE YIS130 IMU 和 Unitree Actuator SDK 控制 12 个 GO-M8010-6 电机。当前已完成方案阶段 0–6：
 
 - 通用 `JointState`、`ImuState`、`JointCommand` 和硬件后端协议；
 - `config/real/mock.yaml` 与严格配置解析；
@@ -146,13 +146,14 @@ quadruped_train 训练
 - 工程内固定版本的官方 Unitree Actuator SDK 和无硬件构建脚本。
 - 不依赖设备和模型文件的 Mock 电机、Mock IMU、Mock 策略及故障注入。
 - GO-M8010-6 真实电机后端，支持多条 USB-RS485 总线、12 关节映射、转子侧换算、完整反馈聚合以及总线状态诊断。
+- YIS130 UART 后端，支持 YIS 流式协议解析、校验重同步、四元数和角速度单位统一、IMU 到机身安装旋转以及超时诊断。
 
-当前没有实机 runner 和 YIS130 后端，默认入口也不会向设备发送命令。GO-M8010-6 后端只能由未来实机入口显式实例化，并要求真实配置和已构建的官方 SDK；完整运行循环将在后续阶段实现。阶段和验收顺序见项目根目录的 `方案.md`。
+当前没有实机 runner，默认入口不会打开电机或 IMU。真实后端只能由未来实机入口显式实例化，并要求完整标定配置；完整状态、运行循环和安全状态机将在后续阶段实现。阶段和验收顺序见项目根目录的 `方案.md`。
 
 ### 依赖
 
 ```bash
-pip install mujoco torch numpy pyyaml evdev "onnxruntime>=1.16,<2"
+pip install mujoco torch numpy pyyaml pyserial evdev "onnxruntime>=1.16,<2"
 ```
 
 ### 默认文件

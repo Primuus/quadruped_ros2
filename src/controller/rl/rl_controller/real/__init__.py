@@ -13,7 +13,12 @@ from .config import (
     RealSafetyConfig,
     load_real_config,
 )
-from .hardware import MockImuBackend, MockMotorBackend, UnitreeM8010Backend
+from .hardware import (
+    MockImuBackend,
+    MockMotorBackend,
+    UnitreeM8010Backend,
+    YesenseYis130Backend,
+)
 from .policy import MockPolicy
 from .types import ImuState, JointCommand, JointState, RealRobotState
 
@@ -38,5 +43,6 @@ __all__ = [
     'RealRuntimeConfig',
     'RealSafetyConfig',
     'UnitreeM8010Backend',
+    'YesenseYis130Backend',
     'load_real_config',
 ]

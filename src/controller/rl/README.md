@@ -2,7 +2,7 @@
 
 `src/controller/rl` 是 `quadruped` 中的 RL 部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`。当前可运行入口负责在本地 MuJoCo 中加载 `quadruped_train` 从同一个部署模型直接导出的 TorchScript 或 ONNX 策略；同时已经建立未来自研四足实机部署的公共接口、配置格式和厂商 SDK 集成基础。
 
-当前已经接入 MuJoCo 的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、物理资源和策略文件，而不是复制部署主循环。本仓库不包含训练代码。实机侧目前完成方案阶段 0–5，具有 Mock 组件和 GO-M8010-6 真实电机后端，但还没有实机 runner、YIS130 后端或可执行入口，默认运行方式不能向真实电机发命令。
+当前已经接入 MuJoCo 的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、物理资源和策略文件，而不是复制部署主循环。本仓库不包含训练代码。实机侧目前完成方案阶段 0–6，具有 Mock 组件、GO-M8010-6 电机后端和 YIS130 IMU 后端，但还没有实机 runner 或可执行入口，默认运行方式不能访问真实设备。
 
 ## MuJoCo 数据流
 
@@ -36,7 +36,7 @@ Linux evdev 键盘命令
   -> Unitree GO-M8010-6 电机后端
 ```
 
-当前提供不接设备即可导入的公共状态类型、硬件协议、严格配置解析器、Mock 配置、三类 Mock 组件及故障注入、官方 Actuator SDK 的固定源码快照和 GO-M8010-6 后端。该后端使用延迟导入，只有未来实机入口选择 `unitree_m8010` 时才加载 SDK 和打开串口。完整 Mock runner、YIS130 后端和实机入口属于后续阶段。
+当前提供不接设备即可导入的公共状态类型、硬件协议、严格配置解析器、Mock 配置、三类 Mock 组件及故障注入、官方 Actuator SDK 的固定源码快照、GO-M8010-6 后端和 YIS130 后端。两个真实后端都延迟加载可选依赖，只有未来实机入口创建并调用 `open()` 时才打开设备。完整状态聚合、Mock runner 和实机入口属于后续阶段。
 
 ## 目录结构
 
@@ -62,12 +62,14 @@ src/controller/rl/
     input/
     real/
       config.py
+      orientation.py
       types.py
       hardware/
         base.py
         mock_motor.py
         mock_imu.py
         unitree_m8010.py
+        yesense_yis130.py
       policy/
         mock_policy.py
   test/
@@ -335,7 +337,7 @@ input 模块导出文件，供 `deploy_mujoco_rl.py` 导入 `KeyboardInput` 和 
 
 ## real 模块
 
-`rl_controller/real` 是未来实机运行器依赖的硬件无关层。阶段 0–5 已定义数据契约、配置、离线 Mock 组件和 GO-M8010-6 真实电机后端；只有显式创建并打开真实后端时才会访问串口。
+`rl_controller/real` 是未来实机运行器依赖的硬件无关层。阶段 0–6 已定义数据契约、配置、离线 Mock 组件以及 GO-M8010-6 和 YIS130 真实后端；只有显式创建并打开真实后端时才会访问串口。
 
 ### `rl_controller/real/types.py`
 
@@ -396,11 +398,36 @@ rotor_torque = output_torque ÷ gear_ratio
 
 反馈执行逆变换并回到策略关节顺序。后端还提供最近完整周期的 `last_bus_timestamps`、`last_bus_time_skew_s`、`last_state_age_s` 和 `last_bus_errors`，供后续状态聚合与安全层使用。`safe_stop()` 会尝试向所有电机发送 BRAKE，即使中途某个电机通信失败也会继续处理其余地址，并锁存停止状态。
 
+### `rl_controller/real/hardware/yesense_yis130.py`
+
+实现 YESENSE YIS130 的 YIS 私有 UART 协议和 `ImuBackend`：
+
+- 从带噪声或分段到达的字节流中查找 `0x59 0x53` 帧头；
+- 校验 TID、payload 长度和 CK1/CK2 双累加校验；
+- 按 TLV 读取 `0x20` 角速度和 `0x41` 四元数，拒绝缺失、重复、错误长度或非有限数据；
+- 将原始小端有符号整数按 `1e-6` 缩放，并按配置将 `deg/s` 统一为 `rad/s`；
+- 将原始四元数统一为 `[w, x, y, z]` 并归一化；
+- 坏帧后自动重新查找帧头，报告校验错误数、丢弃字节数、最近 TID、状态年龄和错误原因；
+- 在 `state_timeout_s` 内收不到同时包含姿态和角速度的完整帧时关闭本次读取。
+
+标准 YIS UART 输出中 q0 为四元数实部，因此真实模板使用 `quaternion_order: wxyz`；角速度原始单位为 `deg/s`。若设备固件输出配置与此不同，必须以该设备实际协议为准更新 YAML，不能在后端外重复换算。
+
+### `rl_controller/real/orientation.py`
+
+提供实机链路共用的四元数归一化、乘法、共轭和向量旋转。配置中的 `mounting_quaternion_wxyz` 明确定义为“传感器坐标向量旋转到机身坐标”的 `q_body_from_sensor`。后端执行：
+
+```text
+q_world_from_body = q_world_from_sensor * conjugate(q_body_from_sensor)
+angular_velocity_body = rotate(q_body_from_sensor, angular_velocity_sensor)
+```
+
+安装四元数必须通过实物安装方向验证；单位四元数只适用于 IMU 轴与机身轴完全同向的情况。
+
 ### `rl_controller/real/policy/mock_policy.py`
 
 实现与现有 `Policy` 协议相同的 `infer(observation)` 结构接口。它检查输入维度和有限性，并返回可配置、确定性的 `float32` 动作副本；不加载 TorchScript、ONNX 或模型文件。动作 NaN 注入用于后续安全层测试。
 
-这三个组件当前用于单元级和手工单周期集成验证，不代表完整实机运行器。线程、状态机、观测历史和安全管理仍按方案后续阶段实现。
+三个 Mock 组件当前用于单元级和手工单周期集成验证，不代表完整实机运行器。线程、状态机、观测历史和安全管理仍按方案后续阶段实现。
 
 ## third_party 目录
 
@@ -487,6 +514,10 @@ Mock 组件测试，覆盖电机速度限幅、生命周期、`safe_stop`、IMU 
 
 完全使用伪 SDK 验证 GO-M8010-6 后端，不打开实际串口。覆盖关节侧与转子侧位置、速度、增益和力矩换算，多总线及重复 ID、完整反馈时间戳、状态年龄、无响应/坏帧/错误 ID/NaN/串口异常、跨总线超时、减速比核对以及全电机 BRAKE。
 
+### `test/test_yesense_yis130_backend.py`
+
+使用内存串口和 YIS 协议样例帧验证 YIS130 后端，不打开设备。覆盖分段帧、流重同步、CK1/CK2、TLV 数据、四元数顺序、角速度单位、安装旋转、缺失数据、串口异常和状态超时。
+
 ### `test/compare_policy_backends.py`
 
 TorchScript / ONNX 离线输出一致性检查脚本。它向两个模型输入完全相同的 `float32` 历史观测，打印平均绝对误差、最大绝对误差和 `allclose` 结果；比较失败时退出码为 1。
@@ -524,7 +555,7 @@ pip install -e src/controller/rl
 CPU 版安装会包含 `onnxruntime`。如果只补装依赖：
 
 ```bash
-pip install mujoco torch numpy pyyaml evdev "onnxruntime>=1.16,<2"
+pip install mujoco torch numpy pyyaml pyserial evdev "onnxruntime>=1.16,<2"
 ```
 
 再把训练直接导出的两个策略放到：
