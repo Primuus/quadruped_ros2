@@ -2,7 +2,7 @@
 
 `src/controller/rl` 是 `quadruped` 中的 RL 部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`。当前可运行入口负责在本地 MuJoCo 中加载 `quadruped_train` 从同一个部署模型直接导出的 TorchScript 或 ONNX 策略；同时已经建立未来自研四足实机部署的公共接口、配置格式和厂商 SDK 集成基础。
 
-当前已经接入 MuJoCo 的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、物理资源和策略文件，而不是复制部署主循环。本仓库不包含训练代码。实机侧目前完成方案阶段 0–6，具有 Mock 组件、GO-M8010-6 电机后端和 YIS130 IMU 后端，但还没有实机 runner 或可执行入口，默认运行方式不能访问真实设备。
+当前已经接入 MuJoCo 的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、物理资源和策略文件，而不是复制部署主循环。本仓库不包含训练代码。实机侧目前完成方案阶段 0–7，具有 Mock 组件、GO-M8010-6 电机后端、YIS130 IMU 后端、状态聚合和 45×6 历史观测，但还没有实机 runner 或可执行入口，默认运行方式不能访问真实设备。
 
 ## MuJoCo 数据流
 
@@ -36,7 +36,7 @@ Linux evdev 键盘命令
   -> Unitree GO-M8010-6 电机后端
 ```
 
-当前提供不接设备即可导入的公共状态类型、硬件协议、严格配置解析器、Mock 配置、三类 Mock 组件及故障注入、官方 Actuator SDK 的固定源码快照、GO-M8010-6 后端和 YIS130 后端。两个真实后端都延迟加载可选依赖，只有未来实机入口创建并调用 `open()` 时才打开设备。完整状态聚合、Mock runner 和实机入口属于后续阶段。
+当前提供不接设备即可导入的公共状态类型、硬件协议、严格配置解析器、Mock 配置、三类 Mock 组件及故障注入、官方 Actuator SDK 的固定源码快照、两个真实硬件后端、完整状态聚合和实机历史观测。真实后端都延迟加载可选依赖，只有未来实机入口创建并调用 `open()` 时才打开设备。策略后端、Mock runner 和实机入口属于后续阶段。
 
 ## 目录结构
 
@@ -62,7 +62,9 @@ src/controller/rl/
     input/
     real/
       config.py
+      observation.py
       orientation.py
+      state.py
       types.py
       hardware/
         base.py
@@ -80,6 +82,9 @@ src/controller/rl/
     test_mock_backends.py
     test_real_config.py
     test_real_interfaces.py
+    test_real_state_observation.py
+    test_unitree_m8010_backend.py
+    test_yesense_yis130_backend.py
 ```
 
 ## 顶层文件
@@ -337,7 +342,7 @@ input 模块导出文件，供 `deploy_mujoco_rl.py` 导入 `KeyboardInput` 和 
 
 ## real 模块
 
-`rl_controller/real` 是未来实机运行器依赖的硬件无关层。阶段 0–6 已定义数据契约、配置、离线 Mock 组件以及 GO-M8010-6 和 YIS130 真实后端；只有显式创建并打开真实后端时才会访问串口。
+`rl_controller/real` 是未来实机运行器依赖的硬件无关层。阶段 0–7 已定义数据契约、配置、离线 Mock 组件、真实硬件后端、完整状态和 actor 历史观测；只有显式创建并打开真实后端时才会访问串口。
 
 ### `rl_controller/real/types.py`
 
@@ -422,6 +427,45 @@ angular_velocity_body = rotate(q_body_from_sensor, angular_velocity_sensor)
 ```
 
 安装四元数必须通过实物安装方向验证；单位四元数只适用于 IMU 轴与机身轴完全同向的情况。
+
+### `rl_controller/real/state.py`
+
+`RealStateAggregator` 在线程之间汇合 `JointState` 和 `ImuState`，只发布符合以下条件的 `RealRobotState`：
+
+- 电机反馈恰好包含配置要求的全部关节，当前四足接口为 12 个；
+- 电机和 IMU 的 `valid` 均为真，数值中没有 NaN/Inf，IMU 四元数范数有效；
+- 每条电机总线时间戳、IMU 时间戳都未超过 `safety.max_state_age_s`；
+- 所有来源的最大时间差不超过电机与 IMU `state_timeout_s` 中的较小值；
+- `JointState.timestamp` 等于本轮所有电机总线中最早的时间戳。
+
+GO-M8010-6 后端接入时，应把同一轮的 `last_bus_timestamps` 一并传入：
+
+```python
+joint_state = motor_backend.cycle(command)
+state_aggregator.update_joints(
+    joint_state,
+    source_timestamps=motor_backend.last_bus_timestamps,
+)
+state_aggregator.update_imu(imu_backend.read())
+robot_state = state_aggregator.snapshot()
+```
+
+`snapshot()` 在状态不完整时抛出 `StateUnavailableError`，`try_snapshot()` 则返回 `None`。非零电机错误码会随快照保留，温度和错误码是否触发停机属于后续安全管理阶段，不由聚合器提前吞掉。
+
+### `rl_controller/real/observation.py`
+
+`build_real_one_step_observation()` 构造与训练侧完全同序的 45 维当前帧：
+
+```text
+[0:3]   command * command_scale
+[3:6]   body angular velocity * angular_velocity_scale
+[6:9]   projected_gravity
+[9:21]  (joint_position - default_angles) * dof_position_scale
+[21:33] joint_velocity * dof_velocity_scale
+[33:45] previous clipped action
+```
+
+`RealObservationHistory` 按 `[当前帧, 前1帧, ..., 前5帧]` 堆叠。状态时间戳必须严格递增；重复、倒退、过期会失败，帧间隔过大时会清空旧历史并从当前帧重新预热。只有连续帧数达到 `runtime.history_warmup_frames` 后 `update()` 才返回输入，否则返回 `None`。当前配置要求至少 6 帧，最终输出为连续 `float32` 的 270 维向量，并按 `policy.clip_observations` 执行与训练侧相同的裁剪。
 
 ### `rl_controller/real/policy/mock_policy.py`
 
@@ -517,6 +561,10 @@ Mock 组件测试，覆盖电机速度限幅、生命周期、`safe_stop`、IMU 
 ### `test/test_yesense_yis130_backend.py`
 
 使用内存串口和 YIS 协议样例帧验证 YIS130 后端，不打开设备。覆盖分段帧、流重同步、CK1/CK2、TLV 数据、四元数顺序、角速度单位、安装旋转、缺失数据、串口异常和状态超时。
+
+### `test/test_real_state_observation.py`
+
+验证完整 12 关节门槛、多总线与 IMU 时间同步、状态新鲜度、无效/非有限状态拒绝、45 维各切片顺序、重力投影、6 帧连续预热、最新帧优先、观测裁剪和时间中断后重置。最后使用 Mock 电机与 IMU 连续生成 6 帧状态，确认能够得到稳定的 270 维输入并通过 Mock actor 接口。
 
 ### `test/compare_policy_backends.py`
 

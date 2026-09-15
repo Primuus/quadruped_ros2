@@ -57,6 +57,13 @@ def quaternion_rotate_wxyz(quaternion: Any, vector: Any) -> np.ndarray:
     ).astype(np.float32)
 
 
+def quaternion_rotate_inverse_wxyz(quaternion: Any, vector: Any) -> np.ndarray:
+    return quaternion_rotate_wxyz(
+        quaternion_conjugate_wxyz(quaternion),
+        vector,
+    )
+
+
 def transform_imu_sample_to_body(
     sensor_quaternion_wxyz: Any,
     sensor_angular_velocity: Any,

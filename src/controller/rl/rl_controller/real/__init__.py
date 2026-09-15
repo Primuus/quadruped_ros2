@@ -19,6 +19,12 @@ from .hardware import (
     UnitreeM8010Backend,
     YesenseYis130Backend,
 )
+from .observation import (
+    ObservationContinuityError,
+    RealObservationHistory,
+    build_real_one_step_observation,
+)
+from .state import RealStateAggregator, StateUnavailableError
 from .policy import MockPolicy
 from .types import ImuState, JointCommand, JointState, RealRobotState
 
@@ -31,6 +37,7 @@ __all__ = [
     'MockImuBackend',
     'MockMotorBackend',
     'MockPolicy',
+    'ObservationContinuityError',
     'RealConfigError',
     'RealDeploymentConfig',
     'RealImuConfig',
@@ -38,11 +45,15 @@ __all__ = [
     'RealMotorConfig',
     'RealObservationScales',
     'RealPolicyConfig',
+    'RealObservationHistory',
     'RealRobotState',
     'RealRobotConfig',
     'RealRuntimeConfig',
     'RealSafetyConfig',
+    'RealStateAggregator',
+    'StateUnavailableError',
     'UnitreeM8010Backend',
     'YesenseYis130Backend',
+    'build_real_one_step_observation',
     'load_real_config',
 ]
