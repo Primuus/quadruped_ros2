@@ -2,7 +2,7 @@
 
 `src/controller/rl` 是 `quadruped` 中的 RL 部署包。它和传统 PD ROS2 控制链路完全隔离，不走 `ros2 launch`。当前可运行入口负责在本地 MuJoCo 中加载 `quadruped_train` 从同一个部署模型直接导出的 TorchScript 或 ONNX 策略；同时已经建立未来自研四足实机部署的公共接口、配置格式和厂商 SDK 集成基础。
 
-当前已经接入 MuJoCo 的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、物理资源和策略文件，而不是复制部署主循环。本仓库不包含训练代码。实机侧目前只完成方案阶段 0–3，还没有实机 runner、电机后端、IMU 后端或可执行入口，不能向真实电机发命令。
+当前已经接入 MuJoCo 的机器人实例是 Go2；核心代码按四足机器人通用接口组织，新增其他四足机器人时应新增 YAML 配置、物理资源和策略文件，而不是复制部署主循环。本仓库不包含训练代码。实机侧目前完成方案阶段 0–4，具有 Mock 电机、Mock IMU 和 Mock 策略，但还没有实机 runner、真实硬件后端或可执行入口，不能向真实电机发命令。
 
 ## MuJoCo 数据流
 
@@ -36,7 +36,7 @@ Linux evdev 键盘命令
   -> Unitree GO-M8010-6 电机后端
 ```
 
-当前只提供不接设备即可导入的公共状态类型、硬件协议、严格配置解析器、Mock 配置、真实机器人待填写模板，以及官方 Actuator SDK 的固定源码快照和无硬件构建脚本。Mock runner、真实硬件后端和实机入口属于后续阶段。
+当前提供不接设备即可导入的公共状态类型、硬件协议、严格配置解析器、Mock 配置、三类 Mock 组件及故障注入，以及官方 Actuator SDK 的固定源码快照和无硬件构建脚本。完整 Mock runner、真实硬件后端和实机入口属于后续阶段。
 
 ## 目录结构
 
@@ -63,12 +63,18 @@ src/controller/rl/
     real/
       config.py
       types.py
-      hardware/base.py
+      hardware/
+        base.py
+        mock_motor.py
+        mock_imu.py
+      policy/
+        mock_policy.py
   test/
     compare_policy_backends.py
     deploy_mujoco_rl_debug.py
     deploy_mujoco_rl_keyboard_debug.py
     test_keyboard_controller.py
+    test_mock_backends.py
     test_real_config.py
     test_real_interfaces.py
 ```
@@ -328,7 +334,7 @@ input 模块导出文件，供 `deploy_mujoco_rl.py` 导入 `KeyboardInput` 和 
 
 ## real 模块
 
-`rl_controller/real` 是未来实机运行器依赖的硬件无关层。阶段 0–3 只定义数据契约和配置，不创建串口、不加载策略，也不发送电机命令。
+`rl_controller/real` 是未来实机运行器依赖的硬件无关层。阶段 0–4 已定义数据契约、配置和离线 Mock 组件；这些组件不创建串口、不加载模型，也不发送真实电机命令。
 
 ### `rl_controller/real/types.py`
 
@@ -354,6 +360,28 @@ input 模块导出文件，供 `deploy_mujoco_rl.py` 导入 `KeyboardInput` 和 
 - 真实设备路径、ONNX 文件和待填写字段。
 
 该模块只依赖 NumPy 和 PyYAML，可以在未构建 Unitree SDK、未安装 MuJoCo、未连接硬件时导入。
+
+### `rl_controller/real/hardware/mock_motor.py`
+
+实现 `MotorBackend` 协议的确定性关节空间模拟后端。调用 `open()` 后，每次 `cycle()` 根据经过的单调时钟时间，以受限速度从当前关节角跟随 `JointCommand.position`。默认速度上限由每个关节的 `max_target_step_rad * io_frequency_hz` 得到，也可以在测试中显式覆盖。
+
+后端支持：
+
+- 检查命令关节数量和所有命令数组的有限性；
+- 将模拟状态约束在输出轴关节限位内；
+- `safe_stop()` 锁存停止状态，保持位置并清零速度和力矩；
+- 注入过期时间戳、NaN、高温、电机错误码和无效状态；
+- `clear_faults()` 清除故障，但不会解除已经触发的 `safe_stop()`。
+
+### `rl_controller/real/hardware/mock_imu.py`
+
+实现 `ImuBackend` 协议，输出机身坐标系下的 `[w, x, y, z]` 四元数和 `rad/s` 角速度。可设置正常状态，也可注入过期时间戳、NaN、无效状态，以及由 roll/pitch/yaw 构造的倾倒姿态。
+
+### `rl_controller/real/policy/mock_policy.py`
+
+实现与现有 `Policy` 协议相同的 `infer(observation)` 结构接口。它检查输入维度和有限性，并返回可配置、确定性的 `float32` 动作副本；不加载 TorchScript、ONNX 或模型文件。动作 NaN 注入用于后续安全层测试。
+
+这三个组件当前用于单元级和手工单周期集成验证，不代表完整实机运行器。线程、状态机、观测历史和安全管理仍按方案后续阶段实现。
 
 ## third_party 目录
 
@@ -427,6 +455,10 @@ target_joint_pos
 ### `test/test_real_interfaces.py`
 
 不访问设备的实机公共接口测试，覆盖状态数组的类型、维度、只读快照、时间戳和硬件协议结构。
+
+### `test/test_mock_backends.py`
+
+Mock 组件测试，覆盖电机速度限幅、生命周期、`safe_stop`、IMU 状态、策略输入输出以及各类故障注入。测试还手工执行一次 `270 维输入 -> 12 维动作 -> JointCommand -> 电机/IMU反馈 -> RealRobotState` 周期，确认不连接设备、不构建 Unitree SDK、不提供 ONNX 也能完成离线链路。
 
 ### `test/test_real_config.py`
 
@@ -607,6 +639,7 @@ python3 -m py_compile src/controller/rl/rl_controller/core/policy.py
 python3 -m py_compile src/controller/rl/rl_controller/input/keyboard_input.py
 python3 -m py_compile src/controller/rl/rl_controller/input/keyboard_controller.py
 python3 -m py_compile src/controller/rl/rl_controller/real/config.py
+python3 -m compileall -q src/controller/rl/rl_controller/real
 PYTHONPATH=src/controller/rl python3 -m unittest discover \
   -s src/controller/rl/test -p 'test_*.py' -v
 ```

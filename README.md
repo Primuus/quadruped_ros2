@@ -144,8 +144,9 @@ quadruped_train 训练
 - `config/real/mock.yaml` 与严格配置解析；
 - `config/real/custom_quadruped.example.yaml` 待标定模板；
 - 工程内固定版本的官方 Unitree Actuator SDK 和无硬件构建脚本。
+- 不依赖设备和模型文件的 Mock 电机、Mock IMU、Mock 策略及故障注入。
 
-当前没有实机 runner、Mock 后端、真实电机/IMU 后端，也不会向设备发送命令。后续阶段和验收顺序见项目根目录的 `方案.md`。
+当前没有实机 runner 和真实电机/IMU 后端，也不会向设备发送命令。Mock 组件当前通过单元测试手工串联，完整运行循环将在后续阶段实现；阶段和验收顺序见项目根目录的 `方案.md`。
 
 ### 依赖
 

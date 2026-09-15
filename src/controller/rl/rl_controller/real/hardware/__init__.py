@@ -5,11 +5,15 @@ from .base import (
     ImuBackend,
     MotorBackend,
 )
+from .mock_imu import MockImuBackend
+from .mock_motor import MockMotorBackend
 
 __all__ = [
     'BackendCommunicationError',
     'BackendError',
     'BackendUnavailableError',
     'ImuBackend',
+    'MockImuBackend',
+    'MockMotorBackend',
     'MotorBackend',
 ]

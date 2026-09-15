@@ -13,6 +13,8 @@ from .config import (
     RealSafetyConfig,
     load_real_config,
 )
+from .hardware import MockImuBackend, MockMotorBackend
+from .policy import MockPolicy
 from .types import ImuState, JointCommand, JointState, RealRobotState
 
 __all__ = [
@@ -21,6 +23,9 @@ __all__ = [
     'JointState',
     'MotorBusConfig',
     'MotorJointConfig',
+    'MockImuBackend',
+    'MockMotorBackend',
+    'MockPolicy',
     'RealConfigError',
     'RealDeploymentConfig',
     'RealImuConfig',
