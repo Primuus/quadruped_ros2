@@ -1,6 +1,6 @@
 # quadruped_ros2
 
-`quadruped_ros2` 是四足机器人传统控制工作区，负责 ROS2、Gazebo Classic、有限状态机和关节 PD 力矩控制。强化学习训练、MuJoCo、TorchScript、ONNX 以及 RL 实机推理不属于本仓库。
+`quadruped_ros2` 是四足机器人传统控制工作区，负责 ROS2、Gazebo Classic、有限状态机和关节 PD 力矩控制。
 
 当前 Gazebo 模型资源是 Go1，控制模块按四足机器人组织。接入其他四足机器人时，需要提供对应 URDF、关节顺序、控制器配置和运动参数。
 
@@ -13,8 +13,6 @@
   -> 传统步态与关节 PD 力矩
   -> Gazebo effort controller 或 micro-ROS MCU
 ```
-
-RL 训练位于独立的 `quadruped_train` 仓库，RL 仿真和部署位于独立的 `quadruped` 仓库。三个仓库没有源码导入或运行时路径依赖。
 
 ## 目录
 
@@ -154,6 +152,4 @@ colcon test-result --verbose
 ## 仓库职责
 
 - 本仓库只维护传统 PD ROS2 链路。
-- 不在本仓库加入 RL 策略、MuJoCo 或训练代码。
 - 新机器人资源通过新的机器人描述和配置接入，不覆盖已有机器人配置。
-- 与 RL 仓库之间只交换明确的数据约定，不直接引用对方源码。
